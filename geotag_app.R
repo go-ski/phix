@@ -6,24 +6,29 @@
 # Given a directory of photos, this app:
 #   * reads each photo's GPS EXIF and lists which ones are "no-location"
 #   * shows the current photo + its location on a map (or a world map if none)
-#   * lets you SEARCH for a place by name, then click the map to pick
-#     coordinates and write them into the file
-#   * lets you COPY the location from any already-geotagged photo onto the
-#     current photo
+#   * lets you SEARCH for a place, then click the map to pick coordinates
+#   * lets you COPY a location from one photo and paste/apply it to others
+#     (incl. "apply to all shown" for a whole batch shot at one spot)
 #
 # Synology Photos reads location from each file's EXIF, so once you write GPS
 # here and Synology re-indexes (it detects changed files; you can also force a
 # re-index in Synology Photos > Settings), the photos appear on its map.
 #
 # ---- one-time setup -------------------------------------------------------
-#   install.packages(c("shiny", "leaflet", "leaflet.extras",
+#   install.packages(c("shiny", "leaflet", "leaflet.extras", "watcher",
 #                       "exiftoolr", "magick", "DT"))
 #   exiftoolr::install_exiftool()   # downloads ExifTool (only needed once)
 #
-# ---- run in Positron ------------------------------------------------------
-#   Open this file and click "Run App", or in the Console:
+# ---- run in Positron (with live autoreload) -------------------------------
+#   The {watcher} package gives Shiny event-based (non-polling) autoreload.
+#   Autoreload only attaches for file-path apps, and the option is best set
+#   BEFORE launching, so run it like this from the Console:
+#
+#       options(shiny.autoreload = TRUE)        # uses {watcher} automatically
 #       shiny::runApp("geotag_app.R")
-#   Then type a directory path in the app and click "Scan directory".
+#
+#   Tip: put options(shiny.autoreload = TRUE) in your .Rprofile to keep it on.
+#   Then point the app at a directory and click "Scan directory".
 #
 # ---- safety ---------------------------------------------------------------
 #   Files are edited IN PLACE. Test on a COPY first.
@@ -37,6 +42,12 @@ library(leaflet.extras)
 library(exiftoolr)
 library(magick)
 library(DT)
+
+# Live autoreload backed by {watcher} (event-based, not polling). Setting it
+# here helps on reloads; for first launch, also set it in the Console before
+# runApp() as shown in the header (autoreload only spawns for file-path apps).
+options(shiny.autoreload = TRUE)
+# options(shiny.autoreload.interval = 500)  # watcher batch latency in ms (default 250)
 
 img_exts <- c("jpg", "jpeg", "png", "tif", "tiff", "heic", "heif", "webp", "gif", "bmp")
 
@@ -124,20 +135,25 @@ ui <- fluidPage(
       ),
       tags$br(),
       verbatimTextOutput("coords"),
-      # --- copy-location panel ---
-      tags$div(
-        style = "margin:8px 0; padding:8px 10px; border:1px solid #e3e3e3; border-radius:4px; background:#fafafa;",
-        tags$strong("Copy location from another photo"),
-        fluidRow(
-          column(9, selectInput("copy_source", NULL, choices = character(0), width = "100%")),
-          column(3, tags$div(style = "margin-top:0px;",
-                             actionButton("copy_btn", "Copy here",
-                                          class = "btn-info", width = "100%")))
-        ),
-        uiOutput("copy_hint")
-      ),
       actionButton("save", "Save location to photo", class = "btn-success"),
-      uiOutput("save_msg")
+      uiOutput("save_msg"),
+      tags$hr(),
+      wellPanel(
+        tags$b("Copy / paste location"),
+        tags$div(style = "font-size:90%;color:#555;margin:4px 0 8px;",
+                 "Copy grabs this photo's location (existing GPS, or a pin you ",
+                 "just placed). Then navigate elsewhere and paste it."),
+        fluidRow(
+          column(6, actionButton("copyloc", "\u2398 Copy from this photo", width = "100%")),
+          column(6, uiOutput("clip_msg"))
+        ),
+        tags$br(),
+        fluidRow(
+          column(4, actionButton("pasteloc", "Paste here", width = "100%")),
+          column(4, actionButton("pastesave", "Paste + Save", class = "btn-success", width = "100%")),
+          column(4, actionButton("applyall", "Apply to all shown", class = "btn-warning", width = "100%"))
+        )
+      )
     )
   )
 )
@@ -145,7 +161,23 @@ ui <- fluidPage(
 # --- Server ----------------------------------------------------------------
 
 server <- function(input, output, session) {
-  rv <- reactiveValues(photos = NULL, idx = NULL, sel = NULL, save_msg = NULL)
+  rv <- reactiveValues(photos = NULL, idx = NULL, sel = NULL,
+                       save_msg = NULL, clip = NULL)
+
+  # write GPS to one file and update the in-memory table; returns TRUE on success
+  save_one <- function(path, lat, lon) {
+    ok <- tryCatch({ write_gps(path, lat, lon); TRUE },
+                   error = function(e) {
+                     showNotification(paste("Error:", conditionMessage(e)), type = "error")
+                     FALSE
+                   })
+    if (ok) {
+      i <- which(rv$photos$path == path)
+      rv$photos$lat[i] <- lat
+      rv$photos$lon[i] <- lon
+    }
+    ok
+  }
 
   observeEvent(input$scan, {
     req(nzchar(input$dir))
@@ -170,13 +202,6 @@ server <- function(input, output, session) {
     if (isTRUE(input$only_missing))
       df <- df[is.na(df$lat) | is.na(df$lon), , drop = FALSE]
     df
-  })
-
-  # all photos that currently have a location (candidate copy sources)
-  geotagged <- reactive({
-    df <- rv$photos
-    if (is.null(df) || nrow(df) == 0) return(df[0, , drop = FALSE])
-    df[!is.na(df$lat) & !is.na(df$lon), , drop = FALSE]
   })
 
   # keep idx valid when the list shrinks (e.g. after saving with filter on)
@@ -286,55 +311,14 @@ server <- function(input, output, session) {
       addMarkers(cl$lng, cl$lat, group = "picked", popup = "Selected location")
   })
 
-  # --- copy location from another photo ---
-  # Keep the source dropdown in sync with whichever photos currently have GPS.
-  observe({
-    src <- geotagged()
-    if (nrow(src) == 0) {
-      updateSelectInput(session, "copy_source", choices = character(0))
-    } else {
-      choices <- setNames(src$path,
-                          sprintf("%s  (%.5f, %.5f)", src$file, src$lat, src$lon))
-      keep <- isolate(input$copy_source)
-      updateSelectInput(session, "copy_source", choices = choices,
-                        selected = if (!is.null(keep) && keep %in% choices) keep else NULL)
-    }
-  })
-
-  output$copy_hint <- renderUI({
-    if (nrow(geotagged()) == 0)
-      tags$em(style = "color:#888;", "No geotagged photos to copy from yet.")
-    else
-      tags$small(style = "color:#888;",
-                 "Stages the chosen photo's coordinates onto the current photo \u2014 review on the map, then Save.")
-  })
-
-  observeEvent(input$copy_btn, {
-    req(nzchar(input$copy_source))
-    src <- rv$photos[rv$photos$path == input$copy_source, , drop = FALSE]
-    req(nrow(src) == 1, !is.na(src$lat), !is.na(src$lon))
-    cur <- current()
-    if (identical(src$path, cur$path)) {
-      showNotification("Source and target are the same photo.", type = "warning"); return()
-    }
-    rv$sel <- list(lat = src$lat, lon = src$lon)
-    rv$save_msg <- NULL
-    leafletProxy("map") |> clearGroup("picked") |>
-      setView(src$lon, src$lat, zoom = 12) |>
-      addMarkers(src$lon, src$lat, group = "picked",
-                 popup = paste0("Copied from ", src$file))
-    showNotification(sprintf("Copied location from %s \u2014 click 'Save location to photo' to write it.",
-                             src$file), type = "message")
-  })
-
   output$coords <- renderText({
     if (is.null(rv$sel)) {
       cur <- current()
       if (!is.na(cur$lat) && !is.na(cur$lon))
-        sprintf("Search/click the map, or copy from another photo, to set a new location.\nCurrent: %.6f, %.6f",
+        sprintf("Search/click the map to choose a new location.\nCurrent: %.6f, %.6f",
                 cur$lat, cur$lon)
       else
-        "Search/click the map, or copy from another photo, to set this photo's location."
+        "Search for a place, then click the map to choose a location for this photo."
     } else {
       sprintf("Selected: %.6f, %.6f  \u2014  click 'Save location to photo' to write it.",
               rv$sel$lat, rv$sel$lon)
@@ -347,19 +331,85 @@ server <- function(input, output, session) {
   observeEvent(input$save, {
     req(rv$sel)
     cur <- current()
-    ok <- tryCatch({ write_gps(cur$path, rv$sel$lat, rv$sel$lon); TRUE },
-                   error = function(e) {
-                     showNotification(paste("Error:", conditionMessage(e)), type = "error")
-                     FALSE
-                   })
-    if (ok) {
-      i <- which(rv$photos$path == cur$path)
-      rv$photos$lat[i] <- rv$sel$lat
-      rv$photos$lon[i] <- rv$sel$lon
+    if (save_one(cur$path, rv$sel$lat, rv$sel$lon)) {
       rv$sel <- NULL
       rv$save_msg <- div(style = "color:green;margin-top:6px;", "Saved \u2713")
       showNotification("GPS written to photo.", type = "message")
     }
+  })
+
+  # --- copy / paste location ---
+  output$clip_msg <- renderUI({
+    if (is.null(rv$clip))
+      span("Clipboard: empty", style = "color:#888;")
+    else
+      span(sprintf("Clipboard: %.6f, %.6f", rv$clip$lat, rv$clip$lon),
+           style = "font-weight:bold;")
+  })
+
+  # copy the current photo's location: a just-placed pin wins, else existing GPS
+  observeEvent(input$copyloc, {
+    cur <- current()
+    src <- if (!is.null(rv$sel)) c(rv$sel$lat, rv$sel$lon)
+           else if (!is.na(cur$lat) && !is.na(cur$lon)) c(cur$lat, cur$lon)
+           else NULL
+    if (is.null(src)) {
+      showNotification("This photo has no location to copy. Place a pin first.",
+                       type = "warning")
+      return()
+    }
+    rv$clip <- list(lat = src[1], lon = src[2])
+    showNotification(sprintf("Copied %.6f, %.6f to clipboard.", src[1], src[2]),
+                     type = "message")
+  })
+
+  # stage the clipboard location on the current photo (does not write yet)
+  observeEvent(input$pasteloc, {
+    if (is.null(rv$clip)) { showNotification("Clipboard is empty.", type = "warning"); return() }
+    rv$sel <- list(lat = rv$clip$lat, lon = rv$clip$lon)
+    leafletProxy("map") |> clearGroup("picked") |>
+      addMarkers(rv$clip$lon, rv$clip$lat, group = "picked", popup = "Pasted location") |>
+      setView(rv$clip$lon, rv$clip$lat, zoom = 12)
+  })
+
+  # paste + write the clipboard location to the current photo in one step
+  observeEvent(input$pastesave, {
+    if (is.null(rv$clip)) { showNotification("Clipboard is empty.", type = "warning"); return() }
+    cur <- current()
+    if (save_one(cur$path, rv$clip$lat, rv$clip$lon)) {
+      rv$sel <- NULL
+      rv$save_msg <- div(style = "color:green;margin-top:6px;", "Pasted + saved \u2713")
+      showNotification("Clipboard location written to photo.", type = "message")
+    }
+  })
+
+  # apply the clipboard location to every photo currently listed (with confirm)
+  observeEvent(input$applyall, {
+    if (is.null(rv$clip)) { showNotification("Clipboard is empty.", type = "warning"); return() }
+    df <- view_df(); req(df, nrow(df) > 0)
+    showModal(modalDialog(
+      title = "Apply clipboard location to all shown photos",
+      sprintf("Write %.6f, %.6f to all %d photo(s) currently listed? This edits the files.",
+              rv$clip$lat, rv$clip$lon, nrow(df)),
+      easyClose = TRUE,
+      footer = tagList(modalButton("Cancel"),
+                       actionButton("applyall_ok", "Apply", class = "btn-danger"))
+    ))
+  })
+
+  observeEvent(input$applyall_ok, {
+    removeModal()
+    df <- isolate(view_df()); req(rv$clip, df, nrow(df) > 0)
+    paths <- df$path; n <- length(paths); okn <- 0L
+    withProgress(message = "Writing GPS to photos\u2026", {
+      for (k in seq_along(paths)) {
+        if (save_one(paths[k], rv$clip$lat, rv$clip$lon)) okn <- okn + 1L
+        incProgress(1 / n)
+      }
+    })
+    rv$sel <- NULL
+    showNotification(sprintf("Applied location to %d of %d photo(s).", okn, n),
+                     type = "message")
   })
 }
 
