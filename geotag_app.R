@@ -1,40 +1,43 @@
 # geotag_app.R
 # ---------------------------------------------------------------------------
-# Add / view GPS locations for photos (e.g. a Synology Photos library),
-# using a free OpenStreetMap map with a place-name search box. No API key.
+# Add / view GPS locations for photos (e.g. a Synology Photos library).
+# OpenStreetMap base map, with a SERVER-SIDE place-name search (no API key,
+# and not subject to the flaky addSearchOSM JS control).
 #
 # Given a directory of photos, this app:
 #   * reads each photo's GPS EXIF and lists which ones are "no-location"
 #   * shows the current photo + its location on a map (or a world map if none)
-#   * lets you SEARCH for a place by name, then click the map to pick
-#     coordinates and write them into the file
+#   * lets you search a place by name (R queries Nominatim), pans/drops a pin
+#     there, and writes the chosen coordinates into the file
+#   * you can also just click anywhere on the map to set/fine-tune the pin
 #
 # Synology Photos reads location from each file's EXIF, so once you write GPS
 # here and Synology re-indexes (it detects changed files; you can also force a
 # re-index in Synology Photos > Settings), the photos appear on its map.
 #
 # ---- one-time setup -------------------------------------------------------
-#   install.packages(c("shiny", "leaflet", "leaflet.extras",
+#   install.packages(c("shiny", "leaflet", "httr2",
 #                       "exiftoolr", "magick", "DT"))
 #   exiftoolr::install_exiftool()   # downloads ExifTool (only needed once)
 #
 # ---- run in Positron ------------------------------------------------------
-#   Open this file and click "Run App", or in the Console:
-#       shiny::runApp("geotag_app.R")
-#   Then type a directory path in the app and click "Scan directory".
+#   Open this file and click "Run App", or:  shiny::runApp("geotag_app.R")
 #
 # ---- safety ---------------------------------------------------------------
 #   Files are edited IN PLACE. Test on a COPY first.
-#   "-overwrite_original" (below) means no backup is kept. Remove that flag to
-#   keep a "<name>_original" backup of every file you change.
+#   Remove "-overwrite_original" below to keep a "<name>_original" backup.
 # ---------------------------------------------------------------------------
 
 library(shiny)
 library(leaflet)
-library(leaflet.extras)
+library(httr2)
 library(exiftoolr)
 library(magick)
 library(DT)
+
+# Nominatim asks for a descriptive User-Agent with contact info. Put your own
+# email here so you're a good citizen of the free service.
+NOMINATIM_UA <- "geotag-shiny-app/1.0 (georgeost@gmail.com)"
 
 img_exts <- c("jpg", "jpeg", "png", "tif", "tiff", "heic", "heif", "webp", "gif", "bmp")
 
@@ -46,7 +49,6 @@ list_images <- function(dir) {
              full.names = TRUE, recursive = TRUE)
 }
 
-# Read GPS as signed decimal degrees (-n). Returns one row per file.
 read_gps_table <- function(paths) {
   empty <- data.frame(path = character(), file = character(),
                       lat = numeric(), lon = numeric(),
@@ -59,7 +61,6 @@ read_gps_table <- function(paths) {
              lat = lat, lon = lon, stringsAsFactors = FALSE)
 }
 
-# Write GPS into a single file. ExifTool handles JPEG, HEIC, TIFF, etc.
 write_gps <- function(path, lat, lon) {
   exif_call(
     args = c(
@@ -74,8 +75,30 @@ write_gps <- function(path, lat, lon) {
   )
 }
 
-# Browser-renderable preview cache (HEIC may fail unless ImageMagick has libheic;
-# GPS writing still works regardless).
+# Server-side geocoder: ask Nominatim for matches, return a data.frame.
+# Returns NULL on any failure; the caller shows a notification.
+geocode_osm <- function(query) {
+  if (!nzchar(trimws(query))) return(NULL)
+  resp <- tryCatch(
+    request("https://nominatim.openstreetmap.org/search") |>
+      req_url_query(q = query, format = "jsonv2", limit = 8, addressdetails = 1) |>
+      req_user_agent(NOMINATIM_UA) |>
+      req_timeout(20) |>
+      req_perform(),
+    error = function(e) NULL
+  )
+  if (is.null(resp)) return(NULL)
+  dat <- tryCatch(resp_body_json(resp, simplifyVector = TRUE),
+                  error = function(e) NULL)
+  if (is.null(dat) || length(dat) == 0 || is.null(dat$display_name)) return(NULL)
+  data.frame(
+    label = dat$display_name,
+    lat   = suppressWarnings(as.numeric(dat$lat)),
+    lon   = suppressWarnings(as.numeric(dat$lon)),
+    stringsAsFactors = FALSE
+  )
+}
+
 preview_dir <- file.path(tempdir(), "geotag_previews")
 dir.create(preview_dir, showWarnings = FALSE)
 addResourcePath("previews", preview_dir)
@@ -116,6 +139,13 @@ ui <- fluidPage(
     mainPanel(
       width = 8,
       uiOutput("status"),
+      # --- place-name search (server-side via Nominatim) ---
+      fluidRow(
+        column(9, textInput("place", NULL, width = "100%",
+                            placeholder = "Search a town / place, then press Search")),
+        column(3, actionButton("go_search", "Search", width = "100%"))
+      ),
+      uiOutput("search_choices"),
       fluidRow(
         column(5, uiOutput("preview")),
         column(7, leafletOutput("map", height = 380))
@@ -131,7 +161,8 @@ ui <- fluidPage(
 # --- Server ----------------------------------------------------------------
 
 server <- function(input, output, session) {
-  rv <- reactiveValues(photos = NULL, idx = NULL, sel = NULL, save_msg = NULL)
+  rv <- reactiveValues(photos = NULL, idx = NULL, sel = NULL,
+                       save_msg = NULL, search_results = NULL)
 
   observeEvent(input$scan, {
     req(nzchar(input$dir))
@@ -149,7 +180,6 @@ server <- function(input, output, session) {
     rv$save_msg <- NULL
   })
 
-  # filtered view of the photos
   view_df <- reactive({
     df <- rv$photos
     if (is.null(df) || nrow(df) == 0) return(df)
@@ -158,7 +188,6 @@ server <- function(input, output, session) {
     df
   })
 
-  # keep idx valid when the list shrinks (e.g. after saving with filter on)
   observe({
     df <- view_df()
     if (!is.null(df) && nrow(df) > 0 && !is.null(rv$idx) && rv$idx > nrow(df))
@@ -230,19 +259,9 @@ server <- function(input, output, session) {
           span("no-location", style = "color:#b00;font-weight:bold;"))
   })
 
-  # --- map (OpenStreetMap + place-name search box) ---
+  # --- map (plain OpenStreetMap; search is handled server-side below) ---
   output$map <- renderLeaflet({
-    leaflet() |>
-      addTiles() |>
-      setView(lng = 0, lat = 20, zoom = 2) |>
-      addSearchOSM(options = searchOptions(
-        position             = "topright",
-        collapsed            = FALSE,
-        autoCollapse         = FALSE,
-        hideMarkerOnCollapse = TRUE,
-        zoom                 = 13,
-        textPlaceholder      = "Search a place\u2026"
-      ))
+    leaflet() |> addTiles() |> setView(lng = 0, lat = 20, zoom = 2)
   })
 
   # recenter / mark when the current photo changes
@@ -257,22 +276,60 @@ server <- function(input, output, session) {
       proxy |> setView(0, 20, zoom = 2)
   })
 
-  # click the map to pick a new location (search just pans you to the area)
+  # helper to drop the candidate pin and remember the selection
+  set_pick <- function(lat, lon, label = "Selected location", zoom = NULL) {
+    rv$sel <- list(lat = lat, lon = lon)
+    p <- leafletProxy("map") |> clearGroup("picked")
+    if (!is.null(zoom)) p <- p |> setView(lon, lat, zoom = zoom)
+    p |> addMarkers(lon, lat, group = "picked", popup = label)
+  }
+
+  # --- place-name search (server-side) ---
+  do_search <- function() {
+    req(nzchar(input$place))
+    res <- geocode_osm(input$place)
+    if (is.null(res)) {
+      rv$search_results <- NULL
+      showNotification("No matches (or the search service didn't respond).",
+                       type = "warning")
+      return()
+    }
+    rv$search_results <- res
+    set_pick(res$lat[1], res$lon[1], res$label[1], zoom = 12)  # jump to best match
+  }
+  observeEvent(input$go_search, do_search())
+  # allow pressing Enter in the box to search too
+  observeEvent(input$place_search, do_search(), ignoreInit = TRUE)
+
+  output$search_choices <- renderUI({
+    res <- rv$search_results
+    if (is.null(res) || nrow(res) == 0) return(NULL)
+    selectInput("search_pick", "Matches (pick the right one):",
+                choices = setNames(seq_len(nrow(res)), res$label),
+                width = "100%")
+  })
+
+  observeEvent(input$search_pick, {
+    res <- rv$search_results; req(res)
+    i <- as.integer(input$search_pick)
+    if (is.na(i) || i < 1 || i > nrow(res)) return()
+    set_pick(res$lat[i], res$lon[i], res$label[i], zoom = 12)
+  })
+
+  # click the map to set / fine-tune the pin
   observeEvent(input$map_click, {
     cl <- input$map_click
-    rv$sel <- list(lat = cl$lat, lon = cl$lng)
-    leafletProxy("map") |> clearGroup("picked") |>
-      addMarkers(cl$lng, cl$lat, group = "picked", popup = "Selected location")
+    set_pick(cl$lat, cl$lng)
   })
 
   output$coords <- renderText({
     if (is.null(rv$sel)) {
       cur <- current()
       if (!is.na(cur$lat) && !is.na(cur$lon))
-        sprintf("Search for a place, then click the map to choose a new location.\nCurrent: %.6f, %.6f",
+        sprintf("Search a place or click the map to choose a new location.\nCurrent: %.6f, %.6f",
                 cur$lat, cur$lon)
       else
-        "Search for a place, then click the map to choose a location for this photo."
+        "Search a place or click the map to choose a location for this photo."
     } else {
       sprintf("Selected: %.6f, %.6f  \u2014  click 'Save location to photo' to write it.",
               rv$sel$lat, rv$sel$lon)
