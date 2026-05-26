@@ -10,6 +10,11 @@
 #   * lets you COPY a location from one photo and paste/apply it to others
 #     (incl. "apply to all shown" for a whole batch shot at one spot)
 #
+# The current photo is tracked by file path, so saving never loses your place:
+# selection, table page, and the displayed photo stay put. A tagged photo stays
+# in the list (now showing its coordinates) until you click "Refresh list" or
+# re-scan, which re-applies the "no location" filter.
+#
 # Synology Photos reads location from each file's EXIF, so once you write GPS
 # here and Synology re-indexes (it detects changed files; you can also force a
 # re-index in Synology Photos > Settings), the photos appear on its map.
@@ -28,7 +33,6 @@
 #       shiny::runApp("geotag_app.R")
 #
 #   Tip: put options(shiny.autoreload = TRUE) in your .Rprofile to keep it on.
-#   Then point the app at a directory and click "Scan directory".
 #
 # ---- safety ---------------------------------------------------------------
 #   Files are edited IN PLACE. Test on a COPY first.
@@ -50,6 +54,7 @@ options(shiny.autoreload = TRUE)
 # options(shiny.autoreload.interval = 500)  # watcher batch latency in ms (default 250)
 
 img_exts <- c("jpg", "jpeg", "png", "tif", "tiff", "heic", "heif", "webp", "gif", "bmp")
+PAGE_LEN <- 10L
 
 # --- helpers ---------------------------------------------------------------
 
@@ -87,6 +92,17 @@ write_gps <- function(path, lat, lon) {
   )
 }
 
+# Build the two-column display data frame the table shows.
+tbl_display <- function(df) {
+  data.frame(
+    File = df$file,
+    Location = ifelse(is.na(df$lat) | is.na(df$lon),
+                      "no-location",
+                      sprintf("%.5f, %.5f", df$lat, df$lon)),
+    stringsAsFactors = FALSE
+  )
+}
+
 # Browser-renderable preview cache (HEIC may fail unless ImageMagick has libheic;
 # GPS writing still works regardless).
 preview_dir <- file.path(tempdir(), "geotag_previews")
@@ -117,7 +133,10 @@ ui <- fluidPage(
       textInput("dir", "Photo directory", value = "",
                 placeholder = "/Volumes/photo  or  C:/Users/me/Pictures"),
       checkboxInput("only_missing", "Show only photos with no location", TRUE),
-      actionButton("scan", "Scan directory", class = "btn-primary"),
+      fluidRow(
+        column(6, actionButton("scan", "Scan directory", class = "btn-primary", width = "100%")),
+        column(6, actionButton("refresh", "Refresh list", width = "100%"))
+      ),
       tags$hr(),
       fluidRow(
         column(6, actionButton("prev", "\u2190 Prev", width = "100%")),
@@ -161,10 +180,48 @@ ui <- fluidPage(
 # --- Server ----------------------------------------------------------------
 
 server <- function(input, output, session) {
-  rv <- reactiveValues(photos = NULL, idx = NULL, sel = NULL,
-                       save_msg = NULL, clip = NULL)
+  # rv$photos : full source of truth (path, file, lat, lon)
+  # rv$tbl    : the subset/order currently shown in the table
+  # rv$cur    : path of the current photo (stable across data changes)
+  rv <- reactiveValues(photos = NULL, tbl = NULL, cur = NULL,
+                       sel = NULL, save_msg = NULL, clip = NULL)
 
-  # write GPS to one file and update the in-memory table; returns TRUE on success
+  proxy <- function() dataTableProxy("tbl")
+
+  # (Re)build the table subset from the filter. Keeps the current photo if it
+  # is still present; otherwise selects the first row.
+  rebuild_tbl <- function() {
+    df <- rv$photos
+    if (is.null(df)) { rv$tbl <- NULL; rv$cur <- NULL; return() }
+    if (isTRUE(input$only_missing))
+      df <- df[is.na(df$lat) | is.na(df$lon), , drop = FALSE]
+    rv$tbl <- df
+    if (nrow(df) > 0) {
+      if (is.null(rv$cur) || !(rv$cur %in% df$path)) rv$cur <- df$path[1]
+    } else {
+      rv$cur <- NULL
+    }
+  }
+
+  # Push updated cell values to the table WITHOUT resetting page or selection.
+  refresh_tbl_data <- function() {
+    df <- rv$tbl
+    if (is.null(df) || nrow(df) == 0) return()
+    replaceData(proxy(), tbl_display(df),
+                resetPaging = FALSE, clearSelection = "none", rownames = FALSE)
+  }
+
+  # Move table page + selection to the current photo (no re-render).
+  sync_table <- function() {
+    df <- rv$tbl
+    if (is.null(df) || nrow(df) == 0 || is.null(rv$cur)) return()
+    pos <- match(rv$cur, df$path)
+    if (is.na(pos)) return()
+    selectRows(proxy(), pos)
+    selectPage(proxy(), ceiling(pos / PAGE_LEN))
+  }
+
+  # write GPS to one file, update memory + table cell; returns TRUE on success
   save_one <- function(path, lat, lon) {
     ok <- tryCatch({ write_gps(path, lat, lon); TRUE },
                    error = function(e) {
@@ -173,8 +230,9 @@ server <- function(input, output, session) {
                    })
     if (ok) {
       i <- which(rv$photos$path == path)
-      rv$photos$lat[i] <- lat
-      rv$photos$lon[i] <- lon
+      rv$photos$lat[i] <- lat; rv$photos$lon[i] <- lon
+      j <- which(rv$tbl$path == path)
+      if (length(j)) { rv$tbl$lat[j] <- lat; rv$tbl$lon[j] <- lon }
     }
     ok
   }
@@ -190,66 +248,53 @@ server <- function(input, output, session) {
     withProgress(message = "Reading EXIF\u2026", {
       rv$photos <- read_gps_table(paths)
     })
-    rv$idx <- if (nrow(isolate(view_df())) > 0) 1L else NULL
-    rv$sel <- NULL
-    rv$save_msg <- NULL
-  })
-
-  # filtered view of the photos
-  view_df <- reactive({
-    df <- rv$photos
-    if (is.null(df) || nrow(df) == 0) return(df)
-    if (isTRUE(input$only_missing))
-      df <- df[is.na(df$lat) | is.na(df$lon), , drop = FALSE]
-    df
-  })
-
-  # keep idx valid when the list shrinks (e.g. after saving with filter on)
-  observe({
-    df <- view_df()
-    if (!is.null(df) && nrow(df) > 0 && !is.null(rv$idx) && rv$idx > nrow(df))
-      rv$idx <- nrow(df)
-  })
-
-  observeEvent(input$only_missing, {
-    if (!is.null(rv$photos) && nrow(view_df()) > 0) { rv$idx <- 1L; rv$sel <- NULL }
-  })
-
-  current <- reactive({
-    df <- view_df(); req(df, nrow(df) > 0, rv$idx)
-    df[rv$idx, , drop = FALSE]
-  })
-
-  # --- table + navigation ---
-  output$tbl <- renderDT({
-    df <- view_df()
-    if (is.null(df) || nrow(df) == 0)
-      return(datatable(data.frame(Message = "No photos loaded."),
-                       rownames = FALSE, options = list(dom = "t")))
-    disp <- data.frame(
-      File = df$file,
-      Location = ifelse(is.na(df$lat) | is.na(df$lon),
-                        "no-location",
-                        sprintf("%.5f, %.5f", df$lat, df$lon))
-    )
-    datatable(disp, rownames = FALSE, selection = "single",
-              options = list(pageLength = 10, dom = "tp", scrollX = TRUE))
-  })
-
-  observeEvent(input$tbl_rows_selected, {
-    rv$idx <- input$tbl_rows_selected
+    rv$cur <- NULL          # force selection of first row in rebuild
+    rebuild_tbl()
     rv$sel <- NULL; rv$save_msg <- NULL
   })
 
+  observeEvent(input$refresh,      { rebuild_tbl(); rv$sel <- NULL; rv$save_msg <- NULL })
+  observeEvent(input$only_missing, { rebuild_tbl(); rv$sel <- NULL; rv$save_msg <- NULL })
+
+  current <- reactive({
+    req(rv$cur, rv$photos)
+    row <- rv$photos[rv$photos$path == rv$cur, , drop = FALSE]
+    req(nrow(row) == 1)
+    row
+  })
+
+  # --- table (re-renders only when rv$tbl is rebuilt) ---
+  output$tbl <- renderDT({
+    df <- rv$tbl
+    if (is.null(df) || nrow(df) == 0)
+      return(datatable(data.frame(Message = "No photos loaded."),
+                       rownames = FALSE, options = list(dom = "t")))
+    sel   <- match(isolate(rv$cur), df$path); if (is.na(sel)) sel <- 1L
+    start <- (ceiling(sel / PAGE_LEN) - 1L) * PAGE_LEN
+    datatable(tbl_display(df), rownames = FALSE,
+              selection = list(mode = "single", selected = sel),
+              options = list(pageLength = PAGE_LEN, displayStart = start,
+                             dom = "tp", scrollX = TRUE))
+  })
+
+  # user clicks a row -> set current photo (guarded to avoid feedback loops)
+  observeEvent(input$tbl_rows_selected, {
+    df <- rv$tbl; req(df)
+    p <- df$path[input$tbl_rows_selected]
+    if (!identical(p, rv$cur)) { rv$cur <- p; rv$sel <- NULL; rv$save_msg <- NULL }
+  })
+
   observeEvent(input$prev, {
-    df <- view_df(); req(df, nrow(df) > 0, rv$idx)
-    rv$idx <- max(1L, rv$idx - 1L); rv$sel <- NULL; rv$save_msg <- NULL
-    selectRows(dataTableProxy("tbl"), rv$idx)
+    df <- rv$tbl; req(df, nrow(df) > 0, rv$cur)
+    pos <- match(rv$cur, df$path); if (is.na(pos)) pos <- 1L
+    rv$cur <- df$path[max(1L, pos - 1L)]; rv$sel <- NULL; rv$save_msg <- NULL
+    sync_table()
   })
   observeEvent(input$nxt, {
-    df <- view_df(); req(df, nrow(df) > 0, rv$idx)
-    rv$idx <- min(nrow(df), rv$idx + 1L); rv$sel <- NULL; rv$save_msg <- NULL
-    selectRows(dataTableProxy("tbl"), rv$idx)
+    df <- rv$tbl; req(df, nrow(df) > 0, rv$cur)
+    pos <- match(rv$cur, df$path); if (is.na(pos)) pos <- 0L
+    rv$cur <- df$path[min(nrow(df), pos + 1L)]; rv$sel <- NULL; rv$save_msg <- NULL
+    sync_table()
   })
 
   # --- preview + status ---
@@ -295,12 +340,12 @@ server <- function(input, output, session) {
   observe({
     cur <- current()
     has <- !is.na(cur$lat) && !is.na(cur$lon)
-    proxy <- leafletProxy("map") |> clearGroup("existing") |> clearGroup("picked")
+    p <- leafletProxy("map") |> clearGroup("existing") |> clearGroup("picked")
     if (has)
-      proxy |> setView(cur$lon, cur$lat, zoom = 12) |>
+      p |> setView(cur$lon, cur$lat, zoom = 12) |>
         addMarkers(cur$lon, cur$lat, group = "existing", popup = "Existing location")
     else
-      proxy |> setView(0, 20, zoom = 2)
+      p |> setView(0, 20, zoom = 2)
   })
 
   # click the map to pick a new location (search just pans you to the area)
@@ -334,6 +379,7 @@ server <- function(input, output, session) {
     if (save_one(cur$path, rv$sel$lat, rv$sel$lon)) {
       rv$sel <- NULL
       rv$save_msg <- div(style = "color:green;margin-top:6px;", "Saved \u2713")
+      refresh_tbl_data()       # update the row in place; keep page + selection
       showNotification("GPS written to photo.", type = "message")
     }
   })
@@ -379,6 +425,7 @@ server <- function(input, output, session) {
     if (save_one(cur$path, rv$clip$lat, rv$clip$lon)) {
       rv$sel <- NULL
       rv$save_msg <- div(style = "color:green;margin-top:6px;", "Pasted + saved \u2713")
+      refresh_tbl_data()
       showNotification("Clipboard location written to photo.", type = "message")
     }
   })
@@ -386,7 +433,7 @@ server <- function(input, output, session) {
   # apply the clipboard location to every photo currently listed (with confirm)
   observeEvent(input$applyall, {
     if (is.null(rv$clip)) { showNotification("Clipboard is empty.", type = "warning"); return() }
-    df <- view_df(); req(df, nrow(df) > 0)
+    df <- rv$tbl; req(df, nrow(df) > 0)
     showModal(modalDialog(
       title = "Apply clipboard location to all shown photos",
       sprintf("Write %.6f, %.6f to all %d photo(s) currently listed? This edits the files.",
@@ -399,7 +446,7 @@ server <- function(input, output, session) {
 
   observeEvent(input$applyall_ok, {
     removeModal()
-    df <- isolate(view_df()); req(rv$clip, df, nrow(df) > 0)
+    df <- isolate(rv$tbl); req(rv$clip, df, nrow(df) > 0)
     paths <- df$path; n <- length(paths); okn <- 0L
     withProgress(message = "Writing GPS to photos\u2026", {
       for (k in seq_along(paths)) {
@@ -408,6 +455,7 @@ server <- function(input, output, session) {
       }
     })
     rv$sel <- NULL
+    refresh_tbl_data()
     showNotification(sprintf("Applied location to %d of %d photo(s).", okn, n),
                      type = "message")
   })
