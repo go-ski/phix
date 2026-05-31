@@ -56,14 +56,15 @@ list_photos <- function(dir) {
 }
 
 # Read GPS + orientation for a vector of paths in one ExifTool call.
-# Returns a data frame: path, name, lat, lng, orient.
+# Returns a data frame: path, name, lat, lng, orient, datetime.
 read_meta <- function(paths) {
   out <- data.frame(
-    path   = paths,
-    name   = basename(paths),
-    lat    = NA_real_,
-    lng    = NA_real_,
-    orient = NA_integer_,
+    path     = paths,
+    name     = basename(paths),
+    lat      = NA_real_,
+    lng      = NA_real_,
+    orient   = NA_integer_,
+    datetime = as.POSIXct(NA),
     stringsAsFactors = FALSE
   )
   if (!length(paths)) return(out)
@@ -72,7 +73,8 @@ read_meta <- function(paths) {
     exiftoolr::exif_read(
       paths,
       tags = c("GPSLatitude", "GPSLongitude",
-               "GPSLatitudeRef", "GPSLongitudeRef", "Orientation"),
+               "GPSLatitudeRef", "GPSLongitudeRef", "Orientation",
+               "DateTimeOriginal", "SubSecTimeOriginal"),
       args = "-n"          # -n => numeric (decimal degrees) instead of strings
     ),
     error = function(e) NULL
@@ -86,6 +88,19 @@ read_meta <- function(paths) {
   rlng <- as.character(getcol("GPSLongitudeRef"))
   ornt <- suppressWarnings(as.integer(getcol("Orientation")))
 
+  # Parse DateTimeOriginal ("YYYY:MM:DD HH:MM:SS") into POSIXct.
+  dto_raw <- as.character(getcol("DateTimeOriginal"))
+  dto_clean <- sub("^(\\d{4}):(\\d{2}):(\\d{2})", "\\1-\\2-\\3", dto_raw)
+  dto <- suppressWarnings(
+    as.POSIXct(dto_clean, format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+  )
+  # Attach sub-second offset when available.
+  subsec <- suppressWarnings(as.numeric(getcol("SubSecTimeOriginal")))
+  valid_ss <- !is.na(subsec) & !is.na(dto)
+  dto[valid_ss] <- dto[valid_ss] + subsec[valid_ss] / 10^nchar(
+    as.character(as.integer(subsec[valid_ss]))
+  )
+
   # Hemisphere: magnitude * sign from N/S/E/W ref. If ref is absent, keep
   # whatever sign ExifTool already returned (covers composite-style values).
   lat <- abs(glat); lng <- abs(glng)
@@ -97,9 +112,10 @@ read_meta <- function(paths) {
   src <- normalizePath(d$SourceFile, winslash = "/", mustWork = FALSE)
   key <- normalizePath(paths,        winslash = "/", mustWork = FALSE)
   m <- match(key, src)
-  out$lat    <- lat[m]
-  out$lng    <- lng[m]
-  out$orient <- ornt[m]
+  out$lat      <- lat[m]
+  out$lng      <- lng[m]
+  out$orient   <- ornt[m]
+  out$datetime <- dto[m]
   out
 }
 
@@ -116,6 +132,24 @@ write_gps <- function(path, lat, lng) {
       "-GPSMapDatum=WGS-84",
       "-overwrite_original",   # edit in place, no _original backup file
       "-P"                     # preserve filesystem modify time
+    ),
+    path = path
+  )
+  invisible(TRUE)
+}
+
+# Write a POSIXct datetime into the three main EXIF date/time tags.
+# ExifTool expects "YYYY:MM:DD HH:MM:SS" (colon-separated date).
+write_datetime <- function(path, dt) {
+  stopifnot(inherits(dt, "POSIXct"))
+  stamp <- format(dt, "%Y:%m:%d %H:%M:%S", tz = "UTC")
+  exiftoolr::exif_call(
+    args = c(
+      sprintf("-DateTimeOriginal=%s", stamp),
+      sprintf("-CreateDate=%s",       stamp),
+      sprintf("-ModifyDate=%s",       stamp),
+      "-overwrite_original",
+      "-P"
     ),
     path = path
   )
@@ -190,6 +224,8 @@ ui <- fluidPage(
     .loc-info    { font-size:13px; line-height:1.5em; margin:6px 0; }
     .hint        { color:#666; font-size:12px; }
     #search_q .form-group, #search_q.form-group { margin-bottom:0; }
+    .date-row    { display:flex; gap:6px; align-items:flex-end; margin-top:6px; }
+    .date-row > div { flex:1; }
     ")),
     tags$script(HTML("
       document.addEventListener('keydown', function(e){
@@ -220,6 +256,18 @@ ui <- fluidPage(
       actionButton("save", "Save selected point \u2192 photo",
                    class = "btn-success", width = "100%"),
       br(), br(),
+      # ---- creation-date editor -------------------------------------------
+      tags$hr(),
+      tags$strong("Creation date / time (UTC)"),
+      div(class = "date-row",
+        div(dateInput("edit_date", label = NULL, value = Sys.Date())),
+        div(textInput("edit_time", label = NULL, value = "00:00:00",
+                      placeholder = "HH:MM:SS"))
+      ),
+      actionButton("save_date", "Save date \u2192 photo",
+                   class = "btn-warning", width = "100%"),
+      tags$hr(),
+      # ---------------------------------------------------------------------
       fluidRow(
         column(6, actionButton("copy",  "Copy location",  width = "100%")),
         column(6, actionButton("paste", "Paste & save",   width = "100%"))
@@ -299,6 +347,17 @@ server <- function(input, output, session) {
     rv$thumb <- make_thumb(row$path, row$orient)
     update_map(recenter = TRUE)
     selectRows(tbl_proxy, rv$idx)
+    # Populate the date / time editor inputs.
+    dt <- row$datetime
+    if (!is.na(dt)) {
+      updateDateInput(session, "edit_date",
+                      value = as.Date(format(dt, "%Y-%m-%d", tz = "UTC")))
+      updateTextInput(session, "edit_time",
+                      value = format(dt, "%H:%M:%S", tz = "UTC"))
+    } else {
+      updateDateInput(session, "edit_date", value = Sys.Date())
+      updateTextInput(session, "edit_time", value = "00:00:00")
+    }
     invisible()
   }
 
@@ -392,6 +451,44 @@ server <- function(input, output, session) {
     }
   })
 
+  # --- save creation date to the current photo ------------------------------
+  observeEvent(input$save_date, {
+    if (rv$idx < 1) return()
+    # Validate date input.
+    d <- tryCatch(as.Date(input$edit_date), error = function(e) NA)
+    if (is.na(d)) {
+      showNotification("Invalid date.", type = "error"); return()
+    }
+    # Validate time input ("HH:MM:SS" or "HH:MM").
+    t_str <- trimws(input$edit_time)
+    if (!grepl("^\\d{1,2}:\\d{2}(:\\d{2})?$", t_str)) {
+      showNotification("Time must be HH:MM or HH:MM:SS.", type = "error")
+      return()
+    }
+    if (!grepl(":\\d{2}$", t_str)) t_str <- paste0(t_str, ":00")  # add seconds
+    dt <- tryCatch(
+      as.POSIXct(paste(format(d, "%Y-%m-%d"), t_str), tz = "UTC"),
+      error = function(e) NA
+    )
+    if (is.na(dt) || !inherits(dt, "POSIXct")) {
+      showNotification("Could not parse date/time.", type = "error"); return()
+    }
+    row <- rv$meta[rv$idx, ]
+    ok <- tryCatch({ write_datetime(row$path, dt); TRUE },
+                   error = function(e) {
+                     showNotification(paste("Write failed:", conditionMessage(e)),
+                                      type = "error"); FALSE })
+    if (!ok) return()
+    meta <- rv$meta
+    meta$datetime[rv$idx] <- dt
+    rv$meta <- meta
+    showNotification(
+      sprintf("Date saved: %s \u2192 %s",
+              format(dt, "%Y-%m-%d %H:%M:%S", tz = "UTC"), row$name),
+      type = "message"
+    )
+  })
+
   # --- copy current photo's location to the clipboard buffer ----------------
   observeEvent(input$copy, {
     if (rv$idx < 1) return()
@@ -458,9 +555,12 @@ server <- function(input, output, session) {
              else sprintf("%.6f, %.6f", row$lat, row$lng)
     pend  <- if (is.null(rv$pending)) "\u2014"
              else sprintf("%.6f, %.6f", rv$pending$lat, rv$pending$lng)
+    dt_str <- if (is.na(row$datetime)) "no date"
+              else format(row$datetime, "%Y-%m-%d %H:%M:%S", tz = "UTC")
     tags$div(class = "loc-info",
       tags$div(tags$strong("Saved: "), saved),
       tags$div(tags$strong("Selected (unsaved): "), pend),
+      tags$div(tags$strong("Creation date (UTC): "), dt_str),
       if (!is.null(rv$clip))
         tags$div(tags$strong("Clipboard: "),
                  sprintf("%.6f, %.6f", rv$clip$lat, rv$clip$lng))
@@ -475,6 +575,9 @@ server <- function(input, output, session) {
       Location = ifelse(is.na(rv$meta$lat) | is.na(rv$meta$lng),
                         "no-location",
                         sprintf("%.5f, %.5f", rv$meta$lat, rv$meta$lng)),
+      Date = ifelse(is.na(rv$meta$datetime),
+                    "no date",
+                    format(rv$meta$datetime, "%Y-%m-%d %H:%M", tz = "UTC")),
       stringsAsFactors = FALSE, check.names = FALSE
     )
   })
