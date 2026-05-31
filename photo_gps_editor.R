@@ -235,6 +235,30 @@ ui <- fluidPage(
           document.getElementById('search_go').click();
         }
       });
+
+      // Wire the dir input to a datalist for directory autocompletion.
+      document.addEventListener('DOMContentLoaded', function() {
+        var inp = document.getElementById('dir');
+        if (inp) {
+          var dl = document.createElement('datalist');
+          dl.id = 'dir_completions';
+          inp.setAttribute('list', 'dir_completions');
+          inp.setAttribute('autocomplete', 'off');
+          document.body.appendChild(dl);
+        }
+      });
+
+      // Handler: receive an array of path strings and populate the datalist.
+      Shiny.addCustomMessageHandler('dir_completions', function(paths) {
+        var dl = document.getElementById('dir_completions');
+        if (!dl) return;
+        dl.innerHTML = '';
+        paths.forEach(function(p) {
+          var opt = document.createElement('option');
+          opt.value = p;
+          dl.appendChild(opt);
+        });
+      });
     "))
   ),
   titlePanel("Photo GPS Editor"),
@@ -367,6 +391,45 @@ server <- function(input, output, session) {
     rv$idx <- max(1, min(nrow(rv$meta), i))
     show_current()
   }
+
+  # --- directory autocompletion ---------------------------------------------
+  dir_input_d <- debounce(reactive(input$dir), 300)
+
+  observe({
+    raw <- dir_input_d()
+    if (is.null(raw) || !nzchar(trimws(raw))) {
+      session$sendCustomMessage("dir_completions", list())
+      return()
+    }
+    raw <- trimws(raw)
+
+    # Determine the parent to list: if the input ends with "/" or is itself a
+    # directory, list its children; otherwise list siblings of the partial name.
+    if (dir.exists(raw) && grepl("/$", raw)) {
+      parent <- raw
+    } else {
+      parent <- dirname(raw)
+    }
+
+    if (!dir.exists(parent)) {
+      session$sendCustomMessage("dir_completions", list())
+      return()
+    }
+
+    # List immediate subdirectories of `parent`, filter to those matching the
+    # typed prefix (case-insensitive on all platforms), cap at 20 entries.
+    subdirs <- list.dirs(parent, recursive = FALSE, full.names = TRUE)
+    prefix  <- if (dir.exists(raw) && grepl("/$", raw)) "" else basename(raw)
+    if (nzchar(prefix)) {
+      subdirs <- subdirs[startsWith(tolower(basename(subdirs)), tolower(prefix))]
+    }
+    subdirs <- sort(subdirs)
+    if (length(subdirs) > 20) subdirs <- subdirs[seq_len(20)]
+
+    # Append a trailing slash so selecting a completion extends the path.
+    subdirs <- paste0(subdirs, "/")
+    session$sendCustomMessage("dir_completions", as.list(subdirs))
+  })
 
   # --- load a directory -----------------------------------------------------
   observeEvent(input$load, {
