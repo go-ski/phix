@@ -226,6 +226,33 @@ ui <- fluidPage(
     #search_q .form-group, #search_q.form-group { margin-bottom:0; }
     .date-row    { display:flex; gap:6px; align-items:flex-end; margin-top:6px; }
     .date-row > div { flex:1; }
+
+    #dir-autocomplete {
+      position: absolute;
+      z-index: 9999;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-top: none;
+      border-radius: 0 0 4px 4px;
+      box-shadow: 0 4px 8px rgba(0,0,0,.15);
+      max-height: 220px;
+      overflow-y: auto;
+      display: none;
+      box-sizing: border-box;
+    }
+    #dir-autocomplete .ac-item {
+      padding: 5px 10px;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #dir-autocomplete .ac-item:hover,
+    #dir-autocomplete .ac-item.ac-active {
+      background: #0d6efd;
+      color: #fff;
+    }
     ")),
     tags$script(HTML("
       document.addEventListener('keydown', function(e){
@@ -236,29 +263,104 @@ ui <- fluidPage(
         }
       });
 
-      // Wire the dir input to a datalist for directory autocompletion.
-      document.addEventListener('DOMContentLoaded', function() {
-        var inp = document.getElementById('dir');
-        if (inp) {
-          var dl = document.createElement('datalist');
-          dl.id = 'dir_completions';
-          inp.setAttribute('list', 'dir_completions');
-          inp.setAttribute('autocomplete', 'off');
-          document.body.appendChild(dl);
-        }
-      });
+      (function() {
+        var dropdown, inp, activeIdx = -1;
 
-      // Handler: receive an array of path strings and populate the datalist.
-      Shiny.addCustomMessageHandler('dir_completions', function(paths) {
-        var dl = document.getElementById('dir_completions');
-        if (!dl) return;
-        dl.innerHTML = '';
-        paths.forEach(function(p) {
-          var opt = document.createElement('option');
-          opt.value = p;
-          dl.appendChild(opt);
+        function positionDropdown() {
+          var r = inp.getBoundingClientRect();
+          dropdown.style.left  = (r.left + window.scrollX) + 'px';
+          dropdown.style.top   = (r.bottom + window.scrollY) + 'px';
+          dropdown.style.width = r.width + 'px';
+        }
+
+        function hideDropdown() {
+          dropdown.style.display = 'none';
+          activeIdx = -1;
+        }
+
+        function showDropdown() {
+          if (dropdown.children.length === 0) { hideDropdown(); return; }
+          positionDropdown();
+          dropdown.style.display = 'block';
+        }
+
+        function setActive(idx) {
+          var items = dropdown.querySelectorAll('.ac-item');
+          items.forEach(function(el, i) {
+            el.classList.toggle('ac-active', i === idx);
+          });
+          if (idx >= 0 && idx < items.length) {
+            items[idx].scrollIntoView({ block: 'nearest' });
+          }
+          activeIdx = idx;
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+          inp = document.getElementById('dir');
+          if (!inp) return;
+
+          dropdown = document.createElement('div');
+          dropdown.id = 'dir-autocomplete';
+          document.body.appendChild(dropdown);
+
+          inp.setAttribute('autocomplete', 'off');
+
+          // Keyboard navigation inside the dropdown.
+          inp.addEventListener('keydown', function(e) {
+            if (dropdown.style.display === 'none') return;
+            var items = dropdown.querySelectorAll('.ac-item');
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              setActive(Math.min(activeIdx + 1, items.length - 1));
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              setActive(Math.max(activeIdx - 1, 0));
+            } else if (e.key === 'Enter' && activeIdx >= 0) {
+              e.preventDefault();
+              var val = items[activeIdx].dataset.value;
+              Shiny.setInputValue('dir', val, {priority: 'event'});
+              inp.value = val;
+              hideDropdown();
+            } else if (e.key === 'Escape') {
+              hideDropdown();
+            }
+          });
+
+          // Hide on outside click.
+          document.addEventListener('mousedown', function(e) {
+            if (e.target !== inp && !dropdown.contains(e.target)) hideDropdown();
+          });
+
+          // Reposition on scroll/resize.
+          window.addEventListener('scroll', function() {
+            if (dropdown.style.display !== 'none') positionDropdown();
+          }, true);
+          window.addEventListener('resize', function() {
+            if (dropdown.style.display !== 'none') positionDropdown();
+          });
         });
-      });
+
+        // Handler: receive an array of path strings and render the dropdown.
+        Shiny.addCustomMessageHandler('dir_completions', function(paths) {
+          if (!dropdown) return;
+          dropdown.innerHTML = '';
+          activeIdx = -1;
+          paths.forEach(function(p) {
+            var item = document.createElement('div');
+            item.className = 'ac-item';
+            item.textContent = p;
+            item.dataset.value = p;
+            item.addEventListener('mousedown', function(e) {
+              e.preventDefault();          // keep focus on inp
+              Shiny.setInputValue('dir', p, {priority: 'event'});
+              inp.value = p;
+              hideDropdown();
+            });
+            dropdown.appendChild(item);
+          });
+          showDropdown();
+        });
+      })();
     "))
   ),
   titlePanel("Photo GPS Editor"),
