@@ -17,11 +17,14 @@ tool, driven from R via the
 ### GPS location
 - Browse a folder of photos; each row in the table shows the filename, its
   current GPS coordinates (or *no-location*), and its creation date.
-- View the current photo as a thumbnail alongside an interactive
-  Street / Satellite map (Leaflet + OpenStreetMap / Esri).
-- **Search** a place name (OpenStreetMap Nominatim) to pan the map to a
-  known location.
-- **Click the map** to drop a red "pending" marker at the desired coordinates.
+- View the current photo as a thumbnail alongside an interactive Leaflet map
+  with two switchable tile layers: **OpenStreetMap** (street detail) and
+  **Esri World Imagery** (satellite/aerial).
+- **Search by place name** using the text box and *Search* button, which
+  queries the **OpenStreetMap Nominatim** geocoder and pans the map to the
+  first matching result.
+- **Click anywhere on the map** to drop a red "pending" marker at the desired
+  coordinates — works on both the OpenStreetMap and Esri Satellite layers.
 - **Save selected point → photo** writes `GPSLatitude`, `GPSLatitudeRef`,
   `GPSLongitude`, `GPSLongitudeRef`, and `GPSMapDatum=WGS-84` to the file and
   advances to the next photo.
@@ -52,11 +55,11 @@ R packages (installed automatically on first run if missing):
 | Package | Purpose |
 |---------|---------|
 | shiny | Web app framework |
-| leaflet | Interactive map |
+| leaflet | Interactive map (OpenStreetMap + Esri Satellite tile layers) |
 | exiftoolr | R wrapper for ExifTool |
 | magick | Thumbnail generation / orientation correction |
 | DT | Interactive photo-list table |
-| httr | HTTP requests to Nominatim |
+| httr | HTTP requests to OpenStreetMap Nominatim geocoder |
 | jsonlite | Parse Nominatim JSON responses |
 
 **ExifTool** itself is installed automatically by `exiftoolr::install_exiftool()`
@@ -74,7 +77,12 @@ Or open the file in Positron / RStudio and click **Run App**.
 
 1. Paste a folder path into the *Photo directory* box and click **Load photos**.
 2. For each photo:
-   - **GPS**: search or click the map, then click **Save selected point → photo**.
+   - **GPS**: locate the photo's position using either of two methods:
+     - *Search* — type a place name and click **Search**; the Nominatim
+       geocoder pans the Leaflet map to the result.
+     - *Click* — switch to the **OpenStreetMap** or **Esri Satellite** layer,
+       navigate to the correct spot, and click the map to drop a red marker.
+     Then click **Save selected point → photo** to write the coordinates.
    - **Date**: adjust the date/time fields, then click **Save date → photo**.
    - Use **Copy / Paste & save** to repeat a location across multiple photos.
 3. All edits are written in place (`-overwrite_original`).  
