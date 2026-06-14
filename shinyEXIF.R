@@ -38,7 +38,8 @@
 # ============================================================================
 
 ## ---- 1. Dependencies -------------------------------------------------------
-required <- c("shiny", "leaflet", "exiftoolr", "magick", "DT", "httr", "jsonlite")
+required <- c("shiny", "bslib", "bsicons", "leaflet", "exiftoolr",
+              "magick", "DT", "httr", "jsonlite")
 missing  <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing)) {
   message("Installing missing packages: ", paste(missing, collapse = ", "))
@@ -46,6 +47,7 @@ if (length(missing)) {
 }
 
 library(shiny)
+library(bslib)
 library(leaflet)
 library(DT)
 
@@ -234,17 +236,16 @@ geocode_osm <- function(q) {
 }
 
 ## ---- 3. UI -----------------------------------------------------------------
-ui <- fluidPage(
+ui <- page_sidebar(
+  title = "Photo GPS Editor",
+  fillable = FALSE,
+
   tags$head(
     tags$style(HTML("
-    .photo-box   { text-align:center; margin:8px 0; }
-    .photo-box img { max-width:100%; max-height:300px;
-                     border:1px solid #ccc; border-radius:6px; }
-    .loc-info    { font-size:13px; line-height:1.5em; margin:6px 0; }
-    .hint        { color:#666; font-size:12px; }
-    #search_q .form-group, #search_q.form-group { margin-bottom:0; }
-    .date-row    { display:flex; gap:6px; align-items:flex-end; margin-top:6px; }
-    .date-row > div { flex:1; }
+    .photo-box     { text-align:center; margin:4px 0; }
+    .photo-box img { max-width:100%; max-height:380px;
+                     border-radius:4px; }
+    .loc-info      { font-size:13px; line-height:1.6em; }
 
     #dir-autocomplete {
       position: absolute;
@@ -382,58 +383,109 @@ ui <- fluidPage(
       })();
     "))
   ),
-  titlePanel("Photo GPS Editor"),
-  fluidRow(
-    column(
-      width = 4,
-      wellPanel(
-        textInput("dir", "Photo directory", value = "",
-                  placeholder = "/path/to/photos"),
-        actionButton("load", "Load photos", class = "btn-primary", width = "100%")
-      ),
-      uiOutput("status"),
-      div(class = "photo-box", uiOutput("photo")),
-      fluidRow(
-        column(6, actionButton("prev", "\u25C0 Prev", width = "100%")),
-        column(6, actionButton("nxt",  "Next \u25B6", width = "100%"))
-      ),
-      uiOutput("locinfo"),
-      actionButton("save", "Save selected point \u2192 photo",
-                   class = "btn-success", width = "100%"),
-      br(), br(),
-      # ---- creation-date editor -------------------------------------------
-      tags$hr(),
-      tags$strong("Creation date / time (UTC)"),
-      div(class = "date-row",
-        div(dateInput("edit_date", label = NULL, value = Sys.Date())),
+
+  # ---- Sidebar: load controls, navigation, edit panels --------------------
+  sidebar = sidebar(
+    width = 350,
+
+    # Directory loader
+    textInput("dir", "Photo directory", value = "",
+              placeholder = "/path/to/photos"),
+    actionButton("load", "Load photos", class = "btn-primary w-100"),
+
+    hr(style = "margin: 10px 0;"),
+
+    # Current photo status + navigation
+    uiOutput("status"),
+    layout_columns(
+      col_widths = c(6, 6),
+      actionButton("prev", "\u25C0 Prev", class = "w-100"),
+      actionButton("nxt",  "Next \u25B6", class = "w-100")
+    ),
+
+    hr(style = "margin: 10px 0;"),
+
+    # Location readout + GPS save
+    uiOutput("locinfo"),
+    actionButton("save", "Save selected point \u2192 photo",
+                 class = "btn-success w-100"),
+
+    hr(style = "margin: 10px 0;"),
+
+    # Creation-date editor
+    tags$strong("Creation date / time (UTC)"),
+    div(class = "d-flex gap-2 align-items-end mt-1",
+        div(class = "flex-grow-1", dateInput("edit_date", label = NULL, value = Sys.Date())),
         div(textInput("edit_time", label = NULL, value = "00:00:00",
                       placeholder = "HH:MM:SS"))
-      ),
-      actionButton("save_date", "Save date \u2192 photo",
-                   class = "btn-warning", width = "100%"),
-      tags$hr(),
-      # ---------------------------------------------------------------------
-      fluidRow(
-        column(6, actionButton("copy",  "Copy location",  width = "100%")),
-        column(6, actionButton("paste", "Paste & save",   width = "100%"))
-      ),
-      div(class = "hint", style = "margin-top:8px;",
-          "Search or click the map to choose a point, then Save. ",
-          "Copy grabs the current photo's location; Paste & save writes it ",
-          "to the photo you're now on and moves to the next."),
-      br(),
-      DTOutput("tbl")
     ),
-    column(
-      width = 8,
-      div(style = "display:flex; gap:6px; align-items:center; margin-bottom:6px;",
-          div(style = "flex:1;",
-              textInput("search_q", label = NULL,
-                        placeholder = "Search a place, then press Enter or click Search")),
-          actionButton("search_go", "Search", class = "btn-primary")
-      ),
-      leafletOutput("map", height = "80vh")
+    actionButton("save_date", "Save date \u2192 photo",
+                 class = "btn-warning w-100"),
+
+    hr(style = "margin: 10px 0;"),
+
+    # Copy / paste location
+    layout_columns(
+      col_widths = c(6, 6),
+      actionButton("copy",  "Copy location", class = "w-100"),
+      actionButton("paste", "Paste & save",  class = "w-100")
+    ),
+    p(class = "text-muted mt-2", style = "font-size:12px;",
+      "Search or click the map to choose a point, then Save. ",
+      "Copy grabs the current photo\u2019s location; ",
+      "Paste & save writes it to the photo you\u2019re on and moves to the next.")
+  ),
+
+  # ---- Main content --------------------------------------------------------
+
+  # Progress value boxes
+  layout_columns(
+    col_widths = c(4, 4, 4),
+    value_box(
+      title    = "Total photos",
+      value    = textOutput("vb_total"),
+      showcase = bsicons::bs_icon("images"),
+      theme    = "primary"
+    ),
+    value_box(
+      title    = "Missing GPS",
+      value    = textOutput("vb_missing_gps"),
+      showcase = bsicons::bs_icon("geo-alt-fill"),
+      theme    = "warning"
+    ),
+    value_box(
+      title    = "Missing date",
+      value    = textOutput("vb_missing_date"),
+      showcase = bsicons::bs_icon("calendar-x-fill"),
+      theme    = "danger"
     )
+  ),
+
+  # Thumbnail + map
+  layout_columns(
+    col_widths = c(4, 8),
+    card(
+      card_header("Current photo"),
+      div(class = "photo-box", uiOutput("photo"))
+    ),
+    card(
+      card_body(
+        class = "p-2",
+        div(class = "d-flex gap-2 mb-2",
+            div(class = "flex-grow-1",
+                textInput("search_q", label = NULL,
+                          placeholder = "Search a place, then press Enter or click Search")),
+            actionButton("search_go", "Search", class = "btn-primary")
+        ),
+        leafletOutput("map", height = "65vh")
+      )
+    )
+  ),
+
+  # Photo list table
+  card(
+    card_header("Photo list"),
+    DTOutput("tbl")
   )
 )
 
@@ -713,6 +765,19 @@ server <- function(input, output, session) {
     } else {
       go_to(rv$idx + 1)
     }
+  })
+
+  # --- value box counts -----------------------------------------------------
+  output$vb_total <- renderText({
+    if (is.null(rv$meta)) "\u2014" else as.character(nrow(rv$meta))
+  })
+  output$vb_missing_gps <- renderText({
+    if (is.null(rv$meta)) "\u2014"
+    else as.character(sum(is.na(rv$meta$lat) | is.na(rv$meta$lng)))
+  })
+  output$vb_missing_date <- renderText({
+    if (is.null(rv$meta)) "\u2014"
+    else as.character(sum(is.na(rv$meta$datetime)))
   })
 
   # --- left-panel readouts --------------------------------------------------
