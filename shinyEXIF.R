@@ -317,11 +317,30 @@ ui <- page_sidebar(
     }
     ")),
     tags$script(HTML("
-      document.addEventListener('keydown', function(e){
+      // Returns true when the focused element is a text-entry control so that
+      // arrow-key shortcuts don't interfere with typing or date pickers.
+      function inTextInput() {
+        var el = document.activeElement;
+        if (!el) return false;
+        var tag = el.tagName.toUpperCase();
+        return tag === 'TEXTAREA' || tag === 'SELECT' ||
+               (tag === 'INPUT' &&
+                !/^(button|checkbox|radio|submit|reset)$/i.test(el.type || ''));
+      }
+
+      document.addEventListener('keydown', function(e) {
+        // Enter in the place-search box clicks the Search button.
         if (e.key === 'Enter' && document.activeElement &&
             document.activeElement.id === 'search_q') {
           e.preventDefault();
           document.getElementById('search_go').click();
+          return;
+        }
+        // ArrowLeft / ArrowRight navigate photos when not typing.
+        if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !inTextInput()) {
+          e.preventDefault();
+          var btn = document.getElementById(e.key === 'ArrowLeft' ? 'prev' : 'nxt');
+          if (btn) btn.click();
         }
       });
 
