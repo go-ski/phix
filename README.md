@@ -34,9 +34,15 @@ tool, driven from R via the
   same location.
 
 ### Creation date / time
-- A date picker and a UTC time field let you set or correct the three main
-  EXIF date tags: `DateTimeOriginal`, `CreateDate`, and `ModifyDate`.
-- **Save date → photo** writes the entered value and updates the table.
+- A date picker and a UTC time field let you set or correct the creation date.
+  The current photo's `DateTimeOriginal` tag is read and pre-filled into the
+  inputs for editing.
+- **Save date → photo** writes the entered value to three tags —
+  `DateTimeOriginal` (original capture time), `CreateDate` / `DateTimeDigitized`
+  (digitisation time), and `ModifyDate` — all set to the same timestamp.
+- **Copy date** captures the current photo's date into an in-app clipboard.
+  **Paste date** writes that date to the photo you are viewing and advances —
+  efficient when many consecutive photos share the same date.
 
 ### Navigation
 - Prev / Next buttons and clicking any table row move between photos.
@@ -84,7 +90,8 @@ Or open the file in Positron / RStudio and click **Run App**.
        navigate to the correct spot, and click the map to drop a red marker.
      Then click **Save selected point → photo** to write the coordinates.
    - **Date**: adjust the date/time fields, then click **Save date → photo**.
-   - Use **Copy / Paste & save** to repeat a location across multiple photos.
+   - Use **Copy location** / **Paste & save** to repeat a GPS location across
+     multiple photos; use **Copy date** / **Paste date** to do the same for dates.
 3. All edits are written in place (`-overwrite_original`).  
    **Back up your originals before editing.**
 

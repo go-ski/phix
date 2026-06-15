@@ -526,6 +526,11 @@ ui <- page_sidebar(
     ),
     actionButton("save_date", "Save date \u2192 photo",
                  class = "btn-warning w-100"),
+    layout_columns(
+      col_widths = c(6, 6),
+      actionButton("copy_date",  "Copy date",  class = "w-100"),
+      actionButton("paste_date", "Paste date", class = "w-100")
+    ),
 
     hr(style = "margin: 10px 0;"),
 
@@ -581,6 +586,7 @@ server <- function(input, output, session) {
     idx       = 0,      # currently selected row (1-based)
     pending   = NULL,   # list(lat,lng) chosen on the map but not yet saved
     clip      = NULL,   # copied list(lat,lng)
+    date_clip = NULL,   # copied POSIXct datetime
     thumb     = NULL,   # basename of JPEG thumbnail (RAW/TIFF fallback)
     photo_url = NULL    # URL fed to the popup window
   )
@@ -841,6 +847,65 @@ server <- function(input, output, session) {
     }
   })
 
+  # --- copy current photo's date to the date clipboard ---------------------
+  observeEvent(input$copy_date, {
+    if (rv$idx < 1) return()
+    row <- rv$meta[rv$idx, ]
+    if (!is.na(row$datetime)) {
+      rv$date_clip <- row$datetime
+    } else {
+      # Fall back to whatever is currently shown in the date/time inputs.
+      d <- tryCatch(as.Date(input$edit_date), error = function(e) NA)
+      if (is.na(d)) {
+        showNotification("No valid date to copy.", type = "warning"); return()
+      }
+      t_str <- trimws(input$edit_time)
+      if (!grepl("^\\d{1,2}:\\d{2}(:\\d{2})?$", t_str)) {
+        showNotification("No valid time to copy.", type = "warning"); return()
+      }
+      if (!grepl(":\\d{2}$", t_str)) t_str <- paste0(t_str, ":00")
+      dt <- tryCatch(
+        as.POSIXct(paste(format(d, "%Y-%m-%d"), t_str), tz = "UTC"),
+        error = function(e) NA
+      )
+      if (is.na(dt) || !inherits(dt, "POSIXct")) {
+        showNotification("Could not parse date/time.", type = "warning"); return()
+      }
+      rv$date_clip <- dt
+    }
+    showNotification(
+      sprintf("Copied date: %s",
+              format(rv$date_clip, "%Y-%m-%d %H:%M:%S", tz = "UTC")),
+      type = "message"
+    )
+  })
+
+  # --- paste date clipboard to current photo, write, advance ----------------
+  observeEvent(input$paste_date, {
+    if (rv$idx < 1) return()
+    if (is.null(rv$date_clip)) {
+      showNotification("No date copied yet.", type = "warning"); return()
+    }
+    row <- rv$meta[rv$idx, ]
+    ok <- tryCatch({ write_datetime(row$path, rv$date_clip); TRUE },
+                   error = function(e) {
+                     showNotification(paste("Write failed:", conditionMessage(e)),
+                                      type = "error"); FALSE })
+    if (!ok) return()
+    meta <- rv$meta
+    meta$datetime[rv$idx] <- rv$date_clip
+    rv$meta <- meta
+    showNotification(
+      sprintf("Pasted date \u2192 %s", row$name),
+      type = "message"
+    )
+    if (rv$idx >= nrow(rv$meta)) {
+      showNotification("That was the last photo.", type = "message")
+    } else {
+      go_to(rv$idx + 1)
+    }
+  })
+
   # --- copy current photo's location to the clipboard buffer ----------------
   observeEvent(input$copy, {
     if (rv$idx < 1) return()
@@ -920,8 +985,11 @@ server <- function(input, output, session) {
       tags$div(tags$strong("Selected (unsaved): "), pend),
       tags$div(tags$strong("Creation date (UTC): "), dt_str),
       if (!is.null(rv$clip))
-        tags$div(tags$strong("Clipboard: "),
-                 sprintf("%.6f, %.6f", rv$clip$lat, rv$clip$lng))
+        tags$div(tags$strong("Clipboard GPS: "),
+                 sprintf("%.6f, %.6f", rv$clip$lat, rv$clip$lng)),
+      if (!is.null(rv$date_clip))
+        tags$div(tags$strong("Clipboard date: "),
+                 format(rv$date_clip, "%Y-%m-%d %H:%M:%S", tz = "UTC"))
     )
   })
 
