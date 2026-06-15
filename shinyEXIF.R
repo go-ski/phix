@@ -38,7 +38,7 @@
 # ============================================================================
 
 ## ---- 1. Dependencies -------------------------------------------------------
-required <- c("shiny", "bslib", "bsicons", "leaflet", "exiftoolr",
+required <- c("shiny", "bslib", "leaflet", "exiftoolr",
               "magick", "DT", "httr", "jsonlite")
 missing  <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing)) {
@@ -62,6 +62,11 @@ if (is.null(tryCatch(exiftoolr::exif_version(), error = function(e) NULL))) {
 PHOTO_EXT <- c("jpg", "jpeg", "jpe", "tif", "tiff", "png", "webp",
                "heic", "heif", "dng", "cr2", "cr3", "nef", "arw",
                "orf", "raf", "rw2")
+
+# Formats that browsers can display natively — serve the original file for
+# these so the popup window shows the full-resolution image without any
+# re-encoding or scaling.  Everything else falls back to a magick JPEG thumb.
+BROWSER_PHOTO_EXT <- c("jpg", "jpeg", "jpe", "png", "webp", "heic", "heif")
 
 THUMB_DIR <- file.path(tempdir(), "photo_gps_thumbs")
 dir.create(THUMB_DIR, showWarnings = FALSE, recursive = TRUE)
@@ -242,10 +247,7 @@ ui <- page_sidebar(
 
   tags$head(
     tags$style(HTML("
-    .photo-box     { text-align:center; margin:4px 0; }
-    .photo-box img { max-width:100%; max-height:380px;
-                     border-radius:4px; }
-    .loc-info      { font-size:13px; line-height:1.6em; }
+    .loc-info { font-size:13px; line-height:1.6em; }
 
     #dir-autocomplete {
       position: absolute;
@@ -381,6 +383,27 @@ ui <- page_sidebar(
           showDropdown();
         });
       })();
+
+      // ---- Photo popup window ---------------------------------------------
+      // A single named popup window ('shinyPhotoViewer') is reused across
+      // navigations so the user can position and resize it once.
+      //   force=true  => always open / bring to front (View photo button)
+      //   force=false => only update URL if the window is already open
+      var photoWin = null;
+      Shiny.addCustomMessageHandler('photo_window_update', function(msg) {
+        var already = photoWin && !photoWin.closed;
+        if (msg.force || already) {
+          if (already) {
+            photoWin.location.href = msg.url;
+            if (msg.force) photoWin.focus();
+          } else {
+            photoWin = window.open(
+              msg.url, 'shinyPhotoViewer',
+              'width=900,height=700,resizable=yes,scrollbars=yes'
+            );
+          }
+        }
+      });
     "))
   ),
 
@@ -395,6 +418,8 @@ ui <- page_sidebar(
 
     hr(style = "margin: 10px 0;"),
 
+    # Compact photo counts
+    uiOutput("counts_compact"),
     # Current photo status + navigation
     uiOutput("status"),
     layout_columns(
@@ -433,52 +458,31 @@ ui <- page_sidebar(
     p(class = "text-muted mt-2", style = "font-size:12px;",
       "Search or click the map to choose a point, then Save. ",
       "Copy grabs the current photo\u2019s location; ",
-      "Paste & save writes it to the photo you\u2019re on and moves to the next.")
+      "Paste & save writes it to the photo you\u2019re on and moves to the next."),
+
+    hr(style = "margin: 10px 0;"),
+
+    # Photo viewer launcher
+    actionButton("view_photo", "\U0001F4F7 View photo",
+                 class = "btn-outline-secondary w-100"),
+    p(class = "text-muted mt-1", style = "font-size:12px;",
+      "Opens the current photo in a separate resizable window. ",
+      "The window updates automatically as you navigate.")
   ),
 
   # ---- Main content --------------------------------------------------------
 
-  # Progress value boxes
-  layout_columns(
-    col_widths = c(4, 4, 4),
-    value_box(
-      title    = "Total photos",
-      value    = textOutput("vb_total"),
-      showcase = bsicons::bs_icon("images"),
-      theme    = "primary"
-    ),
-    value_box(
-      title    = "Missing GPS",
-      value    = textOutput("vb_missing_gps"),
-      showcase = bsicons::bs_icon("geo-alt-fill"),
-      theme    = "warning"
-    ),
-    value_box(
-      title    = "Missing date",
-      value    = textOutput("vb_missing_date"),
-      showcase = bsicons::bs_icon("calendar-x-fill"),
-      theme    = "danger"
-    )
-  ),
-
-  # Thumbnail + map
-  layout_columns(
-    col_widths = c(4, 8),
-    card(
-      card_header("Current photo"),
-      div(class = "photo-box", uiOutput("photo"))
-    ),
-    card(
-      card_body(
-        class = "p-2",
-        div(class = "d-flex gap-2 mb-2",
-            div(class = "flex-grow-1",
-                textInput("search_q", label = NULL,
-                          placeholder = "Search a place, then press Enter or click Search")),
-            actionButton("search_go", "Search", class = "btn-primary")
-        ),
-        leafletOutput("map", height = "65vh")
-      )
+  # Map — full width now that the thumbnail lives in its own popup window
+  card(
+    card_body(
+      class = "p-2",
+      div(class = "d-flex gap-2 mb-2",
+          div(class = "flex-grow-1",
+              textInput("search_q", label = NULL,
+                        placeholder = "Search a place, then press Enter or click Search")),
+          actionButton("search_go", "Search", class = "btn-primary")
+      ),
+      leafletOutput("map", height = "72vh")
     )
   ),
 
@@ -493,11 +497,12 @@ ui <- page_sidebar(
 server <- function(input, output, session) {
 
   rv <- reactiveValues(
-    meta    = NULL,   # data frame of all photos
-    idx     = 0,      # currently selected row (1-based)
-    pending = NULL,   # list(lat,lng) chosen on the map but not yet saved
-    clip    = NULL,   # copied list(lat,lng)
-    thumb   = NULL    # basename of current thumbnail
+    meta      = NULL,   # data frame of all photos
+    idx       = 0,      # currently selected row (1-based)
+    pending   = NULL,   # list(lat,lng) chosen on the map but not yet saved
+    clip      = NULL,   # copied list(lat,lng)
+    thumb     = NULL,   # basename of JPEG thumbnail (RAW/TIFF fallback)
+    photo_url = NULL    # URL fed to the popup window
   )
 
   # --- base map (rendered once) --------------------------------------------
@@ -541,7 +546,20 @@ server <- function(input, output, session) {
     if (rv$idx < 1 || is.null(rv$meta)) return(invisible())
     rv$pending <- NULL
     row <- rv$meta[rv$idx, ]
-    rv$thumb <- make_thumb(row$path, row$orient)
+    ext <- tolower(tools::file_ext(row$path))
+    if (ext %in% BROWSER_PHOTO_EXT) {
+      # Browser-displayable: serve the original at full resolution.
+      rv$thumb     <- NULL
+      rv$photo_url <- paste0("originals/", basename(row$path))
+    } else {
+      # RAW / TIFF: transcode to a JPEG thumbnail the browser can show.
+      rv$thumb     <- make_thumb(row$path, row$orient)
+      rv$photo_url <- if (!is.null(rv$thumb)) paste0("thumbs/", rv$thumb) else NULL
+    }
+    # Auto-update the popup window if already open (force = FALSE).
+    if (!is.null(rv$photo_url))
+      session$sendCustomMessage("photo_window_update",
+                                list(url = rv$photo_url, force = FALSE))
     update_map(recenter = TRUE)
     selectRows(tbl_proxy, rv$idx)
     # Populate the date / time editor inputs.
@@ -612,6 +630,10 @@ server <- function(input, output, session) {
       rv$meta <- NULL; rv$idx <- 0; rv$pending <- NULL
       return()
     }
+    # Serve originals from this directory so the popup can display full-res
+    # images without re-encoding.  The path is re-registered on every load so
+    # switching folders always points to the current directory.
+    addResourcePath("originals", normalizePath(trimws(input$dir), mustWork = FALSE))
     withProgress(message = "Reading EXIF ...", value = 0.5, {
       rv$meta <- read_meta(files)
     })
@@ -621,6 +643,15 @@ server <- function(input, output, session) {
   # --- navigation buttons ---------------------------------------------------
   observeEvent(input$nxt,  go_to(rv$idx + 1))
   observeEvent(input$prev, go_to(rv$idx - 1))
+
+  # --- open / focus photo popup window --------------------------------------
+  observeEvent(input$view_photo, {
+    if (rv$idx < 1 || is.null(rv$photo_url)) {
+      showNotification("Load a photo first.", type = "warning"); return()
+    }
+    session$sendCustomMessage("photo_window_update",
+                              list(url = rv$photo_url, force = TRUE))
+  })
 
   # --- table row selection --------------------------------------------------
   observeEvent(input$tbl_rows_selected, {
@@ -767,17 +798,17 @@ server <- function(input, output, session) {
     }
   })
 
-  # --- value box counts -----------------------------------------------------
-  output$vb_total <- renderText({
-    if (is.null(rv$meta)) "\u2014" else as.character(nrow(rv$meta))
-  })
-  output$vb_missing_gps <- renderText({
-    if (is.null(rv$meta)) "\u2014"
-    else as.character(sum(is.na(rv$meta$lat) | is.na(rv$meta$lng)))
-  })
-  output$vb_missing_date <- renderText({
-    if (is.null(rv$meta)) "\u2014"
-    else as.character(sum(is.na(rv$meta$datetime)))
+  # --- compact counts row in sidebar ----------------------------------------
+  output$counts_compact <- renderUI({
+    if (is.null(rv$meta)) return(NULL)
+    n     <- nrow(rv$meta)
+    n_gps <- sum(is.na(rv$meta$lat) | is.na(rv$meta$lng))
+    n_dt  <- sum(is.na(rv$meta$datetime))
+    div(class = "d-flex gap-1 flex-wrap mb-1",
+        span(class = "badge text-bg-primary",  paste0(n,     " photos")),
+        span(class = "badge text-bg-warning",  paste0(n_gps, " no GPS")),
+        span(class = "badge text-bg-danger",   paste0(n_dt,  " no date"))
+    )
   })
 
   # --- left-panel readouts --------------------------------------------------
@@ -788,13 +819,6 @@ server <- function(input, output, session) {
       tags$strong(sprintf("Photo %d of %d", rv$idx, nrow(rv$meta))),
       tags$div(row$name)
     )
-  })
-
-  output$photo <- renderUI({
-    if (rv$idx < 1) return(NULL)
-    if (is.null(rv$thumb))
-      return(tags$em("Preview not available for this file type."))
-    tags$img(src = file.path("thumbs", rv$thumb))
   })
 
   output$locinfo <- renderUI({
