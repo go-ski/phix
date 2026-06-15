@@ -834,6 +834,11 @@ server <- function(input, output, session) {
               format(dt, "%Y-%m-%d %H:%M:%S", tz = "UTC"), row$name),
       type = "message"
     )
+    if (rv$idx >= nrow(rv$meta)) {
+      showNotification("That was the last photo.", type = "message")
+    } else {
+      go_to(rv$idx + 1)
+    }
   })
 
   # --- copy current photo's location to the clipboard buffer ----------------
