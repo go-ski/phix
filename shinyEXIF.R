@@ -73,6 +73,46 @@ dir.create(THUMB_DIR, showWarnings = FALSE, recursive = TRUE)
 unlink(list.files(THUMB_DIR, full.names = TRUE))   # clean stale thumbs
 addResourcePath("thumbs", THUMB_DIR)
 
+# Write the photo-viewer HTML page.  The popup always loads this document so
+# the browser never navigates a raw image URL (which Safari and some Chrome
+# configurations download instead of display).  Photo changes are pushed via
+# postMessage; the page signals 'viewer_ready' once it has loaded.
+writeLines(c(
+  '<!DOCTYPE html>',
+  '<html lang="en">',
+  '<head>',
+  '<meta charset="utf-8">',
+  '<title>Photo Viewer</title>',
+  '<style>',
+  '* { margin: 0; padding: 0; box-sizing: border-box }',
+  'body { background: #111; min-height: 100vh;',
+  '       display: flex; align-items: center; justify-content: center;',
+  '       overflow: auto }',
+  'img  { max-width: 100vw; max-height: 100vh; object-fit: contain;',
+  '       display: none }',
+  'p    { color: #555; font: 14px/1.5 sans-serif }',
+  '</style>',
+  '</head>',
+  '<body>',
+  '<p id="hint">Waiting for photo&hellip;</p>',
+  '<img id="photo" alt="">',
+  '<script>',
+  'window.addEventListener("message", function(e) {',
+  '  if (e.data && e.data.photoUrl) {',
+  '    var img = document.getElementById("photo");',
+  '    img.src = e.data.photoUrl;',
+  '    img.style.display = "block";',
+  '    document.getElementById("hint").style.display = "none";',
+  '    document.title = decodeURIComponent(e.data.photoUrl.split("/").pop());',
+  '  }',
+  '});',
+  '// Signal the opener that this page is ready to receive a photo URL.',
+  'if (window.opener) window.opener.postMessage({ type: "viewer_ready" }, "*");',
+  '</script>',
+  '</body>',
+  '</html>'
+), con = file.path(THUMB_DIR, "viewer.html"))
+
 # List candidate photo files in a directory, sorted.
 list_photos <- function(dir) {
   if (length(dir) != 1 || is.na(dir) || !nzchar(dir) || !dir.exists(dir))
@@ -385,20 +425,41 @@ ui <- page_sidebar(
       })();
 
       // ---- Photo popup window ---------------------------------------------
-      // A single named popup window ('shinyPhotoViewer') is reused across
-      // navigations so the user can position and resize it once.
-      //   force=true  => always open / bring to front (View photo button)
-      //   force=false => only update URL if the window is already open
-      var photoWin = null;
+      // The popup always loads viewer.html — an HTML document — so the
+      // browser never navigates to a raw image URL (which Safari downloads).
+      // Photo changes are sent via postMessage; viewer.html signals
+      // 'viewer_ready' on load so we know it is safe to post.
+      //   force=true  => open / bring to front  (View photo button)
+      //   force=false => update only if already open  (Prev / Next)
+      var photoWin      = null;
+      var pendingPhoto  = null;   // buffered URL waiting for viewer_ready
+
+      // Compute the app's base URL once; works for sub-path deployments too.
+      var _pathDir = window.location.pathname.replace(/[^/]*$/, '');
+      var appBase  = window.location.origin + _pathDir;  // e.g. http://127.0.0.1:7465/
+      var viewerUrl = appBase + 'thumbs/viewer.html';
+
+      // Receive the handshake from viewer.html after it finishes loading.
+      window.addEventListener('message', function(e) {
+        if (e.data && e.data.type === 'viewer_ready' && pendingPhoto) {
+          photoWin.postMessage({ photoUrl: pendingPhoto }, '*');
+          pendingPhoto = null;
+        }
+      });
+
       Shiny.addCustomMessageHandler('photo_window_update', function(msg) {
+        var absUrl  = appBase + msg.url;
         var already = photoWin && !photoWin.closed;
         if (msg.force || already) {
           if (already) {
-            photoWin.location.href = msg.url;
+            // viewer.html is loaded — update the image src directly.
+            photoWin.postMessage({ photoUrl: absUrl }, '*');
             if (msg.force) photoWin.focus();
           } else {
+            // Open viewer.html; send the photo URL once it signals ready.
+            pendingPhoto = absUrl;
             photoWin = window.open(
-              msg.url, 'shinyPhotoViewer',
+              viewerUrl, 'shinyPhotoViewer',
               'width=900,height=700,resizable=yes,scrollbars=yes'
             );
           }
