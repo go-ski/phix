@@ -34,11 +34,6 @@ if (length(missing)) {
   install.packages(missing)
 }
 
-#library(shiny)
-#library(bslib)
-#library(leaflet)
-#library(DT)
-
 # ExifTool is a separate command-line program that exiftoolr drives.
 # This installs a private copy the first time, if one isn't already on PATH.
 if (is.null(tryCatch(exiftoolr::exif_version(), error = function(e) NULL))) {
