@@ -20,8 +20,8 @@
 #     * GPS editing
 #         - Search for a place by name (OpenStreetMap Nominatim) to pan the map.
 #         - Click anywhere on the map to select a new location (shown as a red
-#           marker).  Click "Save selected point → photo" to write those
-#           coordinates to the file and advance to the next photo.
+#           marker).  Click "Save changes → photo" to write GPS (and/or the
+#           date inputs) to the file and advance to the next photo.
 #         - "Copy location" captures the current photo's coordinates;
 #           "Paste & save" writes them to the photo you are viewing and
 #           advances — useful for assigning the same location to many photos.

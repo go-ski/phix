@@ -17,15 +17,17 @@ tool, driven from R via the
 ### GPS location
 - Browse a folder of photos; each row in the table shows the filename, its
   current GPS coordinates (or *no-location*), and its creation date.
-- View the current photo as a thumbnail alongside an interactive Leaflet map
-  with two switchable tile layers: **OpenStreetMap** (street detail) and
-  **Esri World Imagery** (satellite/aerial).
+- An interactive Leaflet map with two switchable tile layers —
+  **OpenStreetMap** (street detail) and **Esri World Imagery** (satellite/aerial)
+  — occupies the main panel.  Click **📷 View photo** to open the current photo
+  in a separate resizable popup window; the window updates automatically as you
+  navigate between photos.
 - **Search by place name** using the text box and *Search* button, which
   queries the **OpenStreetMap Nominatim** geocoder and pans the map to the
   first matching result.
 - **Click anywhere on the map** to drop a red "pending" marker at the desired
   coordinates — works on both the OpenStreetMap and Esri Satellite layers.
-- **Save selected point → photo** writes `GPSLatitude`, `GPSLatitudeRef`,
+- **Save changes → photo** writes `GPSLatitude`, `GPSLatitudeRef`,
   `GPSLongitude`, `GPSLongitudeRef`, and `GPSMapDatum=WGS-84` to the file and
   advances to the next photo.
 - **Copy location** captures the current photo's GPS coordinates into an
@@ -37,9 +39,11 @@ tool, driven from R via the
 - A date picker and a UTC time field let you set or correct the creation date.
   The current photo's `DateTimeOriginal` tag is read and pre-filled into the
   inputs for editing.
-- **Save date → photo** writes the entered value to three tags —
-  `DateTimeOriginal` (original capture time), `CreateDate` / `DateTimeDigitized`
-  (digitisation time), and `ModifyDate` — all set to the same timestamp.
+- **Save changes → photo** saves the entered date if it has changed from the
+  stored value, writing three tags — `DateTimeOriginal` (original capture time),
+  `CreateDate` / `DateTimeDigitized` (digitisation time), and `ModifyDate` —
+  all set to the same timestamp.  If a GPS point was also selected on the map,
+  both GPS and date are written in a single ExifTool call.
 - **Copy date** captures the current photo's date into an in-app clipboard.
   **Paste date** writes that date to the photo you are viewing and advances —
   efficient when many consecutive photos share the same date.
@@ -61,6 +65,7 @@ R packages (installed automatically on first run if missing):
 | Package | Purpose |
 |---------|---------|
 | shiny | Web app framework |
+| bslib | UI layout and theming (Bootstrap 5 page, sidebar, cards) |
 | leaflet | Interactive map (OpenStreetMap + Esri Satellite tile layers) |
 | exiftoolr | R wrapper for ExifTool |
 | magick | Thumbnail generation / orientation correction |
@@ -88,10 +93,11 @@ Or open the file in Positron / RStudio and click **Run App**.
        geocoder pans the Leaflet map to the result.
      - *Click* — switch to the **OpenStreetMap** or **Esri Satellite** layer,
        navigate to the correct spot, and click the map to drop a red marker.
-     Then click **Save selected point → photo** to write the coordinates.
-   - **Date**: adjust the date/time fields, then click **Save date → photo**.
+     Then click **Save changes → photo** to write the coordinates.
+   - **Date**: adjust the date/time fields; **Save changes → photo** will also
+     write the new date if it differs from the saved value.
    - Use **Copy location** / **Paste & save** to repeat a GPS location across
-     multiple photos; use **Copy date** / **Paste date** to do the same for dates.
+     multiple photos; use **Copy date** / **Paste & save date** to do the same for dates.
 3. All edits are written in place (`-overwrite_original`).  
    **Back up your originals before editing.**
 
