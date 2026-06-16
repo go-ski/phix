@@ -529,7 +529,7 @@ ui <- page_sidebar(
     layout_columns(
       col_widths = c(6, 6),
       actionButton("copy_date",  "Copy date",  class = "w-100"),
-      actionButton("paste_date", "Paste date", class = "w-100")
+      actionButton("paste_date", "Paste & save date", class = "w-100")
     ),
 
     hr(style = "margin: 10px 0;"),
