@@ -81,10 +81,10 @@ on first run if it is not already on your `PATH`.
 ## Usage
 
 ```r
-shiny::runApp("shinyEXIF.R")
+shiny::runApp()
 ```
 
-Or open the file in Positron / RStudio and click **Run App**.
+Or open `app.R` in Positron / RStudio and click **Run App**.
 
 1. Paste a folder path into the *Photo directory* box and click **Load photos**.
 2. For each photo:
