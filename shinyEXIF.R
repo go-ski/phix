@@ -185,17 +185,37 @@ read_meta <- function(paths) {
   out
 }
 
-# Write a signed lat/lng into a photo's EXIF GPS tags.
-write_gps <- function(path, lat, lng) {
-  latref <- if (lat >= 0) "N" else "S"
-  lngref <- if (lng >= 0) "E" else "W"
-  exiftoolr::exif_call(
-    args = c(
-      sprintf("-GPSLatitude=%.8f",  abs(lat)),
+# Write GPS coordinates and/or a creation datetime to a photo in ONE ExifTool
+# call.  Pass `gps` as list(lat, lng) to write the location tags, and/or `dt`
+# as a POSIXct to write the three date/time tags.  Supplying both applies all
+# tags in a single exif_call() (one process launch, one file rewrite) instead
+# of two.  Supplying neither is a no-op.  ExifTool expects a colon-separated
+# date ("YYYY:MM:DD HH:MM:SS").
+write_metadata <- function(path, gps = NULL, dt = NULL) {
+  args <- character(0)
+  if (!is.null(gps)) {
+    latref <- if (gps$lat >= 0) "N" else "S"
+    lngref <- if (gps$lng >= 0) "E" else "W"
+    args <- c(args,
+      sprintf("-GPSLatitude=%.8f",  abs(gps$lat)),
       sprintf("-GPSLatitudeRef=%s", latref),
-      sprintf("-GPSLongitude=%.8f", abs(lng)),
+      sprintf("-GPSLongitude=%.8f", abs(gps$lng)),
       sprintf("-GPSLongitudeRef=%s", lngref),
-      "-GPSMapDatum=WGS-84",
+      "-GPSMapDatum=WGS-84"
+    )
+  }
+  if (!is.null(dt)) {
+    stopifnot(inherits(dt, "POSIXct"))
+    stamp <- format(dt, "%Y:%m:%d %H:%M:%S", tz = "UTC")
+    args <- c(args,
+      sprintf("-DateTimeOriginal=%s", stamp),
+      sprintf("-CreateDate=%s",       stamp),
+      sprintf("-ModifyDate=%s",       stamp)
+    )
+  }
+  if (!length(args)) return(invisible(FALSE))   # nothing to write
+  exiftoolr::exif_call(
+    args = c(args,
       "-overwrite_original",   # edit in place, no _original backup file
       "-P"                     # preserve filesystem modify time
     ),
@@ -204,22 +224,12 @@ write_gps <- function(path, lat, lng) {
   invisible(TRUE)
 }
 
-# Write a POSIXct datetime into the three main EXIF date/time tags.
-# ExifTool expects "YYYY:MM:DD HH:MM:SS" (colon-separated date).
+# Thin wrappers preserving the original single-purpose call sites.
+write_gps <- function(path, lat, lng) {
+  write_metadata(path, gps = list(lat = lat, lng = lng))
+}
 write_datetime <- function(path, dt) {
-  stopifnot(inherits(dt, "POSIXct"))
-  stamp <- format(dt, "%Y:%m:%d %H:%M:%S", tz = "UTC")
-  exiftoolr::exif_call(
-    args = c(
-      sprintf("-DateTimeOriginal=%s", stamp),
-      sprintf("-CreateDate=%s",       stamp),
-      sprintf("-ModifyDate=%s",       stamp),
-      "-overwrite_original",
-      "-P"
-    ),
-    path = path
-  )
-  invisible(TRUE)
+  write_metadata(path, dt = dt)
 }
 
 # Bake EXIF orientation into the pixels (emulates exiftool/-auto-orient) so the
@@ -510,10 +520,8 @@ ui <- page_sidebar(
 
     hr(style = "margin: 10px 0;"),
 
-    # Location readout + GPS save
+    # Location readout
     uiOutput("locinfo"),
-    actionButton("save", "Save selected point \u2192 photo",
-                 class = "btn-success w-100"),
 
     hr(style = "margin: 10px 0;"),
 
@@ -524,13 +532,17 @@ ui <- page_sidebar(
         div(textInput("edit_time", label = NULL, value = "00:00:00",
                       placeholder = "HH:MM:SS"))
     ),
-    actionButton("save_date", "Save date \u2192 photo",
-                 class = "btn-warning w-100"),
     layout_columns(
       col_widths = c(6, 6),
       actionButton("copy_date",  "Copy date",  class = "w-100"),
       actionButton("paste_date", "Paste & save date", class = "w-100")
     ),
+
+    # Single save action: writes whichever of the selected map point and the
+    # date/time inputs above has actually changed, in one ExifTool call, then
+    # advances.
+    actionButton("save_both", "Save changes \u2192 photo",
+                 class = "btn-success w-100 mt-2"),
 
     hr(style = "margin: 10px 0;"),
 
@@ -541,7 +553,7 @@ ui <- page_sidebar(
       actionButton("paste", "Paste & save",  class = "w-100")
     ),
     p(class = "text-muted mt-2", style = "font-size:12px;",
-      "Search or click the map to choose a point, then Save. ",
+      "Search or click the map to choose a point, then Save changes. ",
       "Copy grabs the current photo\u2019s location; ",
       "Paste & save writes it to the photo you\u2019re on and moves to the next."),
 
@@ -669,6 +681,32 @@ server <- function(input, output, session) {
     show_current()
   }
 
+  # Parse the date/time editor inputs ("YYYY-MM-DD" + "HH:MM[:SS]") into a
+  # single UTC POSIXct.  Returns the POSIXct on success, or NULL after showing
+  # a notification.  `notify_type` lets callers downgrade errors to warnings
+  # (Copy date treats an unparseable value as a soft warning, not an error).
+  parse_dt_inputs <- function(notify_type = "error") {
+    d <- tryCatch(as.Date(input$edit_date), error = function(e) NA)
+    if (is.na(d)) {
+      showNotification("Invalid date.", type = notify_type); return(NULL)
+    }
+    t_str <- trimws(input$edit_time)
+    if (!grepl("^\\d{1,2}:\\d{2}(:\\d{2})?$", t_str)) {
+      showNotification("Time must be HH:MM or HH:MM:SS.", type = notify_type)
+      return(NULL)
+    }
+    if (!grepl(":\\d{2}$", t_str)) t_str <- paste0(t_str, ":00")  # add seconds
+    dt <- tryCatch(
+      as.POSIXct(paste(format(d, "%Y-%m-%d"), t_str), tz = "UTC"),
+      error = function(e) NA
+    )
+    if (is.na(dt) || !inherits(dt, "POSIXct")) {
+      showNotification("Could not parse date/time.", type = notify_type)
+      return(NULL)
+    }
+    dt
+  }
+
   # --- directory autocompletion ---------------------------------------------
   dir_input_d <- debounce(reactive(input$dir), 300)
 
@@ -776,72 +814,53 @@ server <- function(input, output, session) {
     showNotification(paste0("Found: ", hit$name), type = "message", duration = 4)
   })
 
-  # --- save the pending point to the current photo, then advance ------------
-  observeEvent(input$save, {
+  # --- save any changed GPS and/or date in one ExifTool call, then advance --
+  # The single save action only writes tags that actually differ from what is
+  # already in the file: a pending map point that moved the location, and/or a
+  # date/time that differs from the saved value.  Unchanged tags are left
+  # untouched so the file is only rewritten when there is something to change.
+  observeEvent(input$save_both, {
     if (rv$idx < 1) return()
-    if (is.null(rv$pending)) {
-      showNotification("Click a point on the map first.", type = "warning")
+    row <- rv$meta[rv$idx, ]
+
+    # GPS change: a pending point that differs from the saved location.
+    gps <- NULL
+    if (!is.null(rv$pending)) {
+      moved <- is.na(row$lat) || is.na(row$lng) ||
+        abs(row$lat - rv$pending$lat) > 1e-7 ||
+        abs(row$lng - rv$pending$lng) > 1e-7
+      if (moved) gps <- rv$pending
+    }
+
+    # Date change: parse the inputs and compare at second resolution (the saved
+    # value may carry sub-seconds the inputs can't show, so compare formatted
+    # strings to avoid a spurious rewrite).
+    dt_in <- parse_dt_inputs()
+    if (is.null(dt_in)) return()        # invalid date/time entry — abort
+    dt <- NULL
+    fmt <- function(x) format(x, "%Y:%m:%d %H:%M:%S", tz = "UTC")
+    if (is.na(row$datetime) || fmt(row$datetime) != fmt(dt_in)) dt <- dt_in
+
+    if (is.null(gps) && is.null(dt)) {
+      showNotification("Nothing changed \u2014 nothing to save.", type = "warning")
       return()
     }
-    row <- rv$meta[rv$idx, ]
-    ok <- tryCatch({ write_gps(row$path, rv$pending$lat, rv$pending$lng); TRUE },
+    ok <- tryCatch({ write_metadata(row$path, gps = gps, dt = dt); TRUE },
                    error = function(e) {
                      showNotification(paste("Write failed:", conditionMessage(e)),
                                       type = "error"); FALSE })
     if (!ok) return()
     meta <- rv$meta
-    meta$lat[rv$idx] <- rv$pending$lat
-    meta$lng[rv$idx] <- rv$pending$lng
+    if (!is.null(gps)) { meta$lat[rv$idx] <- gps$lat; meta$lng[rv$idx] <- gps$lng }
+    if (!is.null(dt))  meta$datetime[rv$idx] <- dt
     rv$meta <- meta
-    showNotification(sprintf("Saved %.6f, %.6f \u2192 %s",
-                             rv$pending$lat, rv$pending$lng, row$name),
+    saved <- paste(c(if (!is.null(gps)) "GPS", if (!is.null(dt)) "date"),
+                   collapse = " + ")
+    showNotification(sprintf("Saved %s \u2192 %s", saved, row$name),
                      type = "message")
     if (rv$idx >= nrow(rv$meta)) {
       showNotification("That was the last photo.", type = "message")
       rv$pending <- NULL; update_map()
-    } else {
-      go_to(rv$idx + 1)
-    }
-  })
-
-  # --- save creation date to the current photo ------------------------------
-  observeEvent(input$save_date, {
-    if (rv$idx < 1) return()
-    # Validate date input.
-    d <- tryCatch(as.Date(input$edit_date), error = function(e) NA)
-    if (is.na(d)) {
-      showNotification("Invalid date.", type = "error"); return()
-    }
-    # Validate time input ("HH:MM:SS" or "HH:MM").
-    t_str <- trimws(input$edit_time)
-    if (!grepl("^\\d{1,2}:\\d{2}(:\\d{2})?$", t_str)) {
-      showNotification("Time must be HH:MM or HH:MM:SS.", type = "error")
-      return()
-    }
-    if (!grepl(":\\d{2}$", t_str)) t_str <- paste0(t_str, ":00")  # add seconds
-    dt <- tryCatch(
-      as.POSIXct(paste(format(d, "%Y-%m-%d"), t_str), tz = "UTC"),
-      error = function(e) NA
-    )
-    if (is.na(dt) || !inherits(dt, "POSIXct")) {
-      showNotification("Could not parse date/time.", type = "error"); return()
-    }
-    row <- rv$meta[rv$idx, ]
-    ok <- tryCatch({ write_datetime(row$path, dt); TRUE },
-                   error = function(e) {
-                     showNotification(paste("Write failed:", conditionMessage(e)),
-                                      type = "error"); FALSE })
-    if (!ok) return()
-    meta <- rv$meta
-    meta$datetime[rv$idx] <- dt
-    rv$meta <- meta
-    showNotification(
-      sprintf("Date saved: %s \u2192 %s",
-              format(dt, "%Y-%m-%d %H:%M:%S", tz = "UTC"), row$name),
-      type = "message"
-    )
-    if (rv$idx >= nrow(rv$meta)) {
-      showNotification("That was the last photo.", type = "message")
     } else {
       go_to(rv$idx + 1)
     }
@@ -855,22 +874,8 @@ server <- function(input, output, session) {
       rv$date_clip <- row$datetime
     } else {
       # Fall back to whatever is currently shown in the date/time inputs.
-      d <- tryCatch(as.Date(input$edit_date), error = function(e) NA)
-      if (is.na(d)) {
-        showNotification("No valid date to copy.", type = "warning"); return()
-      }
-      t_str <- trimws(input$edit_time)
-      if (!grepl("^\\d{1,2}:\\d{2}(:\\d{2})?$", t_str)) {
-        showNotification("No valid time to copy.", type = "warning"); return()
-      }
-      if (!grepl(":\\d{2}$", t_str)) t_str <- paste0(t_str, ":00")
-      dt <- tryCatch(
-        as.POSIXct(paste(format(d, "%Y-%m-%d"), t_str), tz = "UTC"),
-        error = function(e) NA
-      )
-      if (is.na(dt) || !inherits(dt, "POSIXct")) {
-        showNotification("Could not parse date/time.", type = "warning"); return()
-      }
+      dt <- parse_dt_inputs("warning")
+      if (is.null(dt)) return()
       rv$date_clip <- dt
     }
     showNotification(
