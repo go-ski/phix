@@ -16,6 +16,7 @@ ui <- bslib::page_sidebar(
   shiny::tags$head(
     shiny::tags$style(shiny::HTML("
     .loc-info { font-size:13px; line-height:1.6em; }
+    .current-val { font-size:12px; color:#6c757d; }
 
     #dir-autocomplete {
       position: absolute;
@@ -238,43 +239,39 @@ ui <- bslib::page_sidebar(
 
     shiny::hr(style = "margin: 10px 0;"),
 
-    # Location readout
-    shiny::uiOutput("locinfo"),
+    # ---- Location section --------------------------------------------------
+    shiny::tags$strong("\U0001F4CD Location"),
+    # Current: read-only from photo, with inline Copy button
+    shiny::uiOutput("current_gps"),
+    # Clipboard: lat/lng inputs (set by map click, Copy, or typing)
+    bslib::layout_columns(
+      col_widths = c(6, 6),
+      shiny::textInput("clip_lat", "Clipboard lat", value = "",
+                       placeholder = "e.g. 45.1234"),
+      shiny::textInput("clip_lng", "Clipboard lng", value = "",
+                       placeholder = "e.g. 9.1234")
+    ),
 
     shiny::hr(style = "margin: 10px 0;"),
 
-    # Creation-date editor
-    shiny::tags$strong("Creation date / time (UTC)"),
+    # ---- Date section ------------------------------------------------------
+    shiny::tags$strong("\U0001F4C5 Creation date / time (UTC)"),
+    # Current: read-only from photo, with inline Copy button
+    shiny::uiOutput("current_date"),
+    # Clipboard: date/time inputs (set by date picker, Copy, or typing)
     shiny::div(class = "d-flex gap-2 align-items-end mt-1",
       shiny::div(class = "flex-grow-1",
                  shiny::dateInput("edit_date", label = NULL, value = Sys.Date())),
       shiny::div(shiny::textInput("edit_time", label = NULL, value = "00:00:00",
                                   placeholder = "HH:MM:SS"))
     ),
-    bslib::layout_columns(
-      col_widths = c(6, 6),
-      shiny::actionButton("copy_date",  "Copy date",  class = "w-100"),
-      shiny::actionButton("paste_date", "Paste & save date", class = "w-100")
-    ),
-
-    # Single save action: writes whichever of the selected map point and the
-    # date/time inputs above has actually changed, in one ExifTool call, then
-    # advances.
-    shiny::actionButton("save_both", "Save changes \u2192 photo",
-                        class = "btn-success w-100 mt-2"),
 
     shiny::hr(style = "margin: 10px 0;"),
 
-    # Copy / paste location
-    bslib::layout_columns(
-      col_widths = c(6, 6),
-      shiny::actionButton("copy",  "Copy location", class = "w-100"),
-      shiny::actionButton("paste", "Paste & save",  class = "w-100")
-    ),
-    shiny::p(class = "text-muted mt-2", style = "font-size:12px;",
-      "Search or click the map to choose a point, then Save changes. ",
-      "Copy grabs the current photo\u2019s location; ",
-      "Paste & save writes it to the photo you\u2019re on and moves to the next."),
+    # Single save action: writes clipboard GPS (if changed) and/or clipboard
+    # date (if changed) to the photo, then advances.
+    shiny::actionButton("save_both", "Save \u2192 photo",
+                        class = "btn-success w-100"),
 
     shiny::hr(style = "margin: 10px 0;"),
 

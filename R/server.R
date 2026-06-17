@@ -12,8 +12,8 @@
 #    4. Directory auto-completion observer
 #    5. Load / navigation observers
 #    6. Map interaction observers (click, search)
-#    7. Save / copy / paste observers (GPS and date)
-#    8. Sidebar output renders (counts_compact, status, locinfo)
+#    7. Save / copy observers (GPS and date)
+#    8. Sidebar output renders (counts_compact, status, current_gps, current_date)
 #    9. Photo list table (reactive + renderDT)
 # ============================================================================
 
@@ -22,11 +22,11 @@ server <- function(input, output, session) {
   rv <- shiny::reactiveValues(
     meta      = NULL,   # data frame of all photos
     idx       = 0,      # currently selected row (1-based)
-    pending   = NULL,   # list(lat,lng) chosen on the map but not yet saved
-    clip      = NULL,   # copied list(lat,lng)
-    date_clip = NULL,   # copied POSIXct datetime
     thumb     = NULL,   # basename of JPEG thumbnail (RAW/TIFF fallback)
     photo_url = NULL    # URL fed to the popup window
+    # Clipboard GPS lives in input$clip_lat / input$clip_lng (text inputs).
+    # Clipboard date lives in input$edit_date / input$edit_time (date inputs).
+    # Both persist across photo navigation; Copy buttons load values into them.
   )
 
   # --- base map (rendered once) --------------------------------------------
@@ -41,67 +41,49 @@ server <- function(input, output, session) {
       ) |>
       leaflet::setView(lng = 0, lat = 20, zoom = 2) |>
       leaflet::addControl(
-        html = "Click the map to set a location for the current photo.",
+        html = "Click the map to set a clipboard location for the current photo.",
         position = "topright"
       )
   })
 
   tbl_proxy <- DT::dataTableProxy("tbl")
 
-  # --- redraw markers + recenter for the current photo ----------------------
+  # --- redraw the saved-location marker for the current photo ---------------
+  # "pending" group (clipboard GPS marker) is managed separately by the
+  # debounced clip_lat/clip_lng observer and is never cleared here so that
+  # the clipboard persists across photo navigation.
   update_map <- function(recenter = TRUE) {
     if (rv$idx < 1 || is.null(rv$meta)) return(invisible())
     row <- rv$meta[rv$idx, ]
     p <- leaflet::leafletProxy("map") |>
-      leaflet::clearGroup("current") |>
-      leaflet::clearGroup("pending")
+      leaflet::clearGroup("current")
     if (!is.na(row$lat) && !is.na(row$lng)) {
       p <- p |> leaflet::addMarkers(row$lng, row$lat, group = "current",
                                     label = "Saved location")
       if (recenter) p <- p |> leaflet::setView(row$lng, row$lat, zoom = 13)
     }
-    if (!is.null(rv$pending)) {
-      p |> leaflet::addCircleMarkers(
-        rv$pending$lng, rv$pending$lat, group = "pending",
-        color = "red", fillColor = "red", radius = 8,
-        fillOpacity = 0.9, label = "New location (unsaved)"
-      )
-    }
     invisible()
   }
 
   # --- show a given photo (thumbnail, map, table selection) -----------------
+  # Does NOT touch the clipboard inputs (clip_lat, clip_lng, edit_date,
+  # edit_time) — those persist until the user changes them explicitly.
   show_current <- function() {
     if (rv$idx < 1 || is.null(rv$meta)) return(invisible())
-    rv$pending <- NULL
     row <- rv$meta[rv$idx, ]
     ext <- tolower(tools::file_ext(row$path))
     if (ext %in% BROWSER_PHOTO_EXT) {
-      # Browser-displayable: serve the original at full resolution.
       rv$thumb     <- NULL
       rv$photo_url <- paste0("originals/", basename(row$path))
     } else {
-      # RAW / TIFF: transcode to a JPEG thumbnail the browser can show.
       rv$thumb     <- make_thumb(row$path, row$orient)
       rv$photo_url <- if (!is.null(rv$thumb)) paste0("thumbs/", rv$thumb) else NULL
     }
-    # Auto-update the popup window if already open (force = FALSE).
     if (!is.null(rv$photo_url))
       session$sendCustomMessage("photo_window_update",
                                 list(url = rv$photo_url, force = FALSE))
     update_map(recenter = TRUE)
     DT::selectRows(tbl_proxy, rv$idx)
-    # Populate the date / time editor inputs.
-    dt <- row$datetime
-    if (!is.na(dt)) {
-      shiny::updateDateInput(session, "edit_date",
-                             value = as.Date(format(dt, "%Y-%m-%d", tz = "UTC")))
-      shiny::updateTextInput(session, "edit_time",
-                             value = format(dt, "%H:%M:%S", tz = "UTC"))
-    } else {
-      shiny::updateDateInput(session, "edit_date", value = Sys.Date())
-      shiny::updateTextInput(session, "edit_time", value = "00:00:00")
-    }
     invisible()
   }
 
@@ -112,10 +94,9 @@ server <- function(input, output, session) {
     show_current()
   }
 
-  # Parse the date/time editor inputs ("YYYY-MM-DD" + "HH:MM[:SS]") into a
+  # Parse the date/time clipboard inputs ("YYYY-MM-DD" + "HH:MM[:SS]") into a
   # single UTC POSIXct.  Returns the POSIXct on success, or NULL after showing
-  # a notification.  `notify_type` lets callers downgrade errors to warnings
-  # (Copy date treats an unparseable value as a soft warning, not an error).
+  # a notification.
   parse_dt_inputs <- function(notify_type = "error") {
     d <- tryCatch(as.Date(input$edit_date), error = function(e) NA)
     if (is.na(d)) {
@@ -126,7 +107,7 @@ server <- function(input, output, session) {
       shiny::showNotification("Time must be HH:MM or HH:MM:SS.", type = notify_type)
       return(NULL)
     }
-    if (!grepl(":\\d{2}$", t_str)) t_str <- paste0(t_str, ":00")  # add seconds
+    if (!grepl(":\\d{2}$", t_str)) t_str <- paste0(t_str, ":00")
     dt <- tryCatch(
       as.POSIXct(paste(format(d, "%Y-%m-%d"), t_str), tz = "UTC"),
       error = function(e) NA
@@ -149,8 +130,6 @@ server <- function(input, output, session) {
     }
     raw <- trimws(raw)
 
-    # Determine the parent to list: if the input ends with "/" or is itself a
-    # directory, list its children; otherwise list siblings of the partial name.
     if (dir.exists(raw) && grepl("/$", raw)) {
       parent <- raw
     } else {
@@ -162,8 +141,6 @@ server <- function(input, output, session) {
       return()
     }
 
-    # List immediate subdirectories of `parent`, filter to those matching the
-    # typed prefix (case-insensitive on all platforms), cap at 20 entries.
     subdirs <- list.dirs(parent, recursive = FALSE, full.names = TRUE)
     prefix  <- if (dir.exists(raw) && grepl("/$", raw)) "" else basename(raw)
     if (nzchar(prefix)) {
@@ -171,8 +148,6 @@ server <- function(input, output, session) {
     }
     subdirs <- sort(subdirs)
     if (length(subdirs) > 20) subdirs <- subdirs[seq_len(20)]
-
-    # Append a trailing slash so selecting a completion extends the path.
     subdirs <- paste0(subdirs, "/")
     session$sendCustomMessage("dir_completions", as.list(subdirs))
   })
@@ -182,12 +157,9 @@ server <- function(input, output, session) {
     files <- list_photos(input$dir)
     if (!length(files)) {
       shiny::showNotification("No photos found in that directory.", type = "error")
-      rv$meta <- NULL; rv$idx <- 0; rv$pending <- NULL
+      rv$meta <- NULL; rv$idx <- 0
       return()
     }
-    # Serve originals from this directory so the popup can display full-res
-    # images without re-encoding.  The path is re-registered on every load so
-    # switching folders always points to the current directory.
     shiny::addResourcePath("originals",
                            normalizePath(trimws(input$dir), mustWork = FALSE))
     shiny::withProgress(message = "Reading EXIF ...", value = 0.5, {
@@ -215,19 +187,35 @@ server <- function(input, output, session) {
     if (length(s) == 1 && !is.na(s) && s != rv$idx) go_to(s)
   })
 
-  # --- click map => set pending point ---------------------------------------
+  # --- map click => fill clipboard lat/lng inputs ---------------------------
   shiny::observeEvent(input$map_click, {
     if (rv$idx < 1) return()
     cl <- input$map_click
-    rv$pending <- list(lat = cl$lat, lng = cl$lng)
-    leaflet::leafletProxy("map") |>
-      leaflet::clearGroup("pending") |>
-      leaflet::addCircleMarkers(cl$lng, cl$lat, group = "pending",
-                                color = "red", fillColor = "red", radius = 8,
-                                fillOpacity = 0.9, label = "New location (unsaved)")
+    shiny::updateTextInput(session, "clip_lat",
+                           value = sprintf("%.6f", cl$lat))
+    shiny::updateTextInput(session, "clip_lng",
+                           value = sprintf("%.6f", cl$lng))
   })
 
-  # --- place search: ONE Nominatim request on Search/Enter (no completion) --
+  # --- clipboard GPS inputs => update map marker (debounced) ----------------
+  clip_lat_d <- shiny::debounce(shiny::reactive(input$clip_lat), 400)
+  clip_lng_d <- shiny::debounce(shiny::reactive(input$clip_lng), 400)
+
+  shiny::observe({
+    lat <- suppressWarnings(as.numeric(clip_lat_d()))
+    lng <- suppressWarnings(as.numeric(clip_lng_d()))
+    p <- leaflet::leafletProxy("map") |> leaflet::clearGroup("pending")
+    if (!is.na(lat) && !is.na(lng) &&
+        abs(lat) <= 90 && abs(lng) <= 180) {
+      p |> leaflet::addCircleMarkers(
+        lng, lat, group = "pending",
+        color = "red", fillColor = "red", radius = 8,
+        fillOpacity = 0.9, label = "Clipboard location (unsaved)"
+      )
+    }
+  })
+
+  # --- place search: ONE Nominatim request on Search/Enter ------------------
   shiny::observeEvent(input$search_go, {
     q <- input$search_q
     if (is.null(q) || !nzchar(trimws(q))) return()
@@ -248,29 +236,62 @@ server <- function(input, output, session) {
                             duration = 4)
   })
 
-  # --- save any changed GPS and/or date in one ExifTool call, then advance --
-  # The single save action only writes tags that actually differ from what is
-  # already in the file: a pending map point that moved the location, and/or a
-  # date/time that differs from the saved value.  Unchanged tags are left
-  # untouched so the file is only rewritten when there is something to change.
+  # --- copy current photo's GPS into the clipboard inputs -------------------
+  shiny::observeEvent(input$copy, {
+    if (rv$idx < 1) return()
+    row <- rv$meta[rv$idx, ]
+    if (is.na(row$lat) || is.na(row$lng)) {
+      shiny::showNotification("This photo has no location to copy.",
+                              type = "warning")
+      return()
+    }
+    shiny::updateTextInput(session, "clip_lat",
+                           value = sprintf("%.6f", row$lat))
+    shiny::updateTextInput(session, "clip_lng",
+                           value = sprintf("%.6f", row$lng))
+    shiny::showNotification(sprintf("Copied %.6f, %.6f", row$lat, row$lng),
+                            type = "message")
+  })
+
+  # --- copy current photo's date into the clipboard date/time inputs --------
+  shiny::observeEvent(input$copy_date, {
+    if (rv$idx < 1) return()
+    row <- rv$meta[rv$idx, ]
+    dt <- row$datetime
+    if (is.na(dt)) {
+      shiny::showNotification("This photo has no date to copy.", type = "warning")
+      return()
+    }
+    shiny::updateDateInput(session, "edit_date",
+                           value = as.Date(format(dt, "%Y-%m-%d", tz = "UTC")))
+    shiny::updateTextInput(session, "edit_time",
+                           value = format(dt, "%H:%M:%S", tz = "UTC"))
+    shiny::showNotification(
+      sprintf("Copied %s", format(dt, "%Y-%m-%d %H:%M:%S", tz = "UTC")),
+      type = "message")
+  })
+
+  # --- save clipboard GPS and/or date to photo, then advance ----------------
+  # Only writes tags that actually differ from the file's saved values.
   shiny::observeEvent(input$save_both, {
     if (rv$idx < 1) return()
     row <- rv$meta[rv$idx, ]
 
-    # GPS change: a pending point that differs from the saved location.
+    # GPS: parse clipboard lat/lng inputs.
     gps <- NULL
-    if (!is.null(rv$pending)) {
+    lat_in <- suppressWarnings(as.numeric(trimws(input$clip_lat)))
+    lng_in <- suppressWarnings(as.numeric(trimws(input$clip_lng)))
+    if (!is.na(lat_in) && !is.na(lng_in) &&
+        abs(lat_in) <= 90 && abs(lng_in) <= 180) {
       moved <- is.na(row$lat) || is.na(row$lng) ||
-        abs(row$lat - rv$pending$lat) > 1e-7 ||
-        abs(row$lng - rv$pending$lng) > 1e-7
-      if (moved) gps <- rv$pending
+        abs(row$lat - lat_in) > 1e-7 ||
+        abs(row$lng - lng_in) > 1e-7
+      if (moved) gps <- list(lat = lat_in, lng = lng_in)
     }
 
-    # Date change: parse the inputs and compare at second resolution (the saved
-    # value may carry sub-seconds the inputs can't show, so compare formatted
-    # strings to avoid a spurious rewrite).
+    # Date: parse clipboard date/time inputs.
     dt_in <- parse_dt_inputs()
-    if (is.null(dt_in)) return()        # invalid date/time entry — abort
+    if (is.null(dt_in)) return()
     dt <- NULL
     fmt <- function(x) format(x, "%Y:%m:%d %H:%M:%S", tz = "UTC")
     if (is.na(row$datetime) || fmt(row$datetime) != fmt(dt_in)) dt <- dt_in
@@ -296,95 +317,7 @@ server <- function(input, output, session) {
                             type = "message")
     if (rv$idx >= nrow(rv$meta)) {
       shiny::showNotification("That was the last photo.", type = "message")
-      rv$pending <- NULL; update_map()
-    } else {
-      go_to(rv$idx + 1)
-    }
-  })
-
-  # --- copy current photo's date to the date clipboard ---------------------
-  shiny::observeEvent(input$copy_date, {
-    if (rv$idx < 1) return()
-    row <- rv$meta[rv$idx, ]
-    if (!is.na(row$datetime)) {
-      rv$date_clip <- row$datetime
-    } else {
-      # Fall back to whatever is currently shown in the date/time inputs.
-      dt <- parse_dt_inputs("warning")
-      if (is.null(dt)) return()
-      rv$date_clip <- dt
-    }
-    shiny::showNotification(
-      sprintf("Copied date: %s",
-              format(rv$date_clip, "%Y-%m-%d %H:%M:%S", tz = "UTC")),
-      type = "message"
-    )
-  })
-
-  # --- paste date clipboard to current photo, write, advance ----------------
-  shiny::observeEvent(input$paste_date, {
-    if (rv$idx < 1) return()
-    if (is.null(rv$date_clip)) {
-      shiny::showNotification("No date copied yet.", type = "warning"); return()
-    }
-    row <- rv$meta[rv$idx, ]
-    ok <- tryCatch({ write_datetime(row$path, rv$date_clip); TRUE },
-                   error = function(e) {
-                     shiny::showNotification(
-                       paste("Write failed:", conditionMessage(e)), type = "error")
-                     FALSE })
-    if (!ok) return()
-    meta <- rv$meta
-    meta$datetime[rv$idx] <- rv$date_clip
-    rv$meta <- meta
-    shiny::showNotification(sprintf("Pasted date \u2192 %s", row$name),
-                            type = "message")
-    if (rv$idx >= nrow(rv$meta)) {
-      shiny::showNotification("That was the last photo.", type = "message")
-    } else {
-      go_to(rv$idx + 1)
-    }
-  })
-
-  # --- copy current photo's location to the clipboard buffer ----------------
-  shiny::observeEvent(input$copy, {
-    if (rv$idx < 1) return()
-    row <- rv$meta[rv$idx, ]
-    if (!is.null(rv$pending)) {
-      rv$clip <- rv$pending
-    } else if (!is.na(row$lat) && !is.na(row$lng)) {
-      rv$clip <- list(lat = row$lat, lng = row$lng)
-    } else {
-      shiny::showNotification("This photo has no location to copy.",
-                              type = "warning")
-      return()
-    }
-    shiny::showNotification(sprintf("Copied %.6f, %.6f", rv$clip$lat, rv$clip$lng),
-                            type = "message")
-  })
-
-  # --- paste buffer to current photo, write, advance ------------------------
-  shiny::observeEvent(input$paste, {
-    if (rv$idx < 1) return()
-    if (is.null(rv$clip)) {
-      shiny::showNotification("Nothing copied yet.", type = "warning"); return()
-    }
-    row <- rv$meta[rv$idx, ]
-    ok <- tryCatch({ write_gps(row$path, rv$clip$lat, rv$clip$lng); TRUE },
-                   error = function(e) {
-                     shiny::showNotification(
-                       paste("Write failed:", conditionMessage(e)), type = "error")
-                     FALSE })
-    if (!ok) return()
-    meta <- rv$meta
-    meta$lat[rv$idx] <- rv$clip$lat
-    meta$lng[rv$idx] <- rv$clip$lng
-    rv$meta <- meta
-    shiny::showNotification(sprintf("Pasted location \u2192 %s", row$name),
-                            type = "message")
-    if (rv$idx >= nrow(rv$meta)) {
-      shiny::showNotification("That was the last photo.", type = "message")
-      rv$pending <- NULL; update_map()
+      update_map()
     } else {
       go_to(rv$idx + 1)
     }
@@ -403,7 +336,7 @@ server <- function(input, output, session) {
     )
   })
 
-  # --- left-panel readouts --------------------------------------------------
+  # --- photo name / index readout -------------------------------------------
   output$status <- shiny::renderUI({
     if (is.null(rv$meta)) return(shiny::helpText("Load a directory to begin."))
     row <- rv$meta[rv$idx, ]
@@ -413,25 +346,27 @@ server <- function(input, output, session) {
     )
   })
 
-  output$locinfo <- shiny::renderUI({
-    if (rv$idx < 1) return(NULL)
-    row   <- rv$meta[rv$idx, ]
-    saved <- if (is.na(row$lat) || is.na(row$lng)) "no-location"
-             else sprintf("%.6f, %.6f", row$lat, row$lng)
-    pend  <- if (is.null(rv$pending)) "\u2014"
-             else sprintf("%.6f, %.6f", rv$pending$lat, rv$pending$lng)
-    dt_str <- if (is.na(row$datetime)) "no date"
-              else format(row$datetime, "%Y-%m-%d %H:%M:%S", tz = "UTC")
-    shiny::tags$div(class = "loc-info",
-      shiny::tags$div(shiny::tags$strong("Saved: "), saved),
-      shiny::tags$div(shiny::tags$strong("Selected (unsaved): "), pend),
-      shiny::tags$div(shiny::tags$strong("Creation date (UTC): "), dt_str),
-      if (!is.null(rv$clip))
-        shiny::tags$div(shiny::tags$strong("Clipboard GPS: "),
-                        sprintf("%.6f, %.6f", rv$clip$lat, rv$clip$lng)),
-      if (!is.null(rv$date_clip))
-        shiny::tags$div(shiny::tags$strong("Clipboard date: "),
-                        format(rv$date_clip, "%Y-%m-%d %H:%M:%S", tz = "UTC"))
+  # --- current GPS readout (from photo) with inline Copy button -------------
+  output$current_gps <- shiny::renderUI({
+    if (rv$idx < 1) return(shiny::p(class = "current-val mt-1", "\u2014"))
+    row <- rv$meta[rv$idx, ]
+    txt <- if (is.na(row$lat) || is.na(row$lng)) "no location"
+           else sprintf("%.6f,\u2002%.6f", row$lat, row$lng)
+    shiny::div(class = "d-flex justify-content-between align-items-center mt-1 mb-1",
+      shiny::span(class = "current-val", txt),
+      shiny::actionButton("copy", "Copy", class = "btn-sm btn-outline-secondary py-0")
+    )
+  })
+
+  # --- current date readout (from photo) with inline Copy button ------------
+  output$current_date <- shiny::renderUI({
+    if (rv$idx < 1) return(shiny::p(class = "current-val mt-1", "\u2014"))
+    row <- rv$meta[rv$idx, ]
+    txt <- if (is.na(row$datetime)) "no date"
+           else format(row$datetime, "%Y-%m-%d %H:%M:%S", tz = "UTC")
+    shiny::div(class = "d-flex justify-content-between align-items-center mt-1 mb-1",
+      shiny::span(class = "current-val", txt),
+      shiny::actionButton("copy_date", "Copy", class = "btn-sm btn-outline-secondary py-0")
     )
   })
 
