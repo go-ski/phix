@@ -1,9 +1,7 @@
 # ============================================================================
 #  server.R — Shiny server function
 #
-#  All external-package calls are fully namespace-qualified (pkg::fun()) so
-#  this file works regardless of which packages are attached at the time
-#  shiny::runApp() auto-sources R/*.R.
+#  app_server is called by run_phix() via shiny::shinyApp().
 #
 #  Internal structure:
 #    1. Reactive state (rv)
@@ -17,7 +15,7 @@
 #    9. Photo list table (reactive + renderDT)
 # ============================================================================
 
-server <- function(input, output, session) {
+app_server <- function(input, output, session) {
 
   rv <- shiny::reactiveValues(
     meta               = NULL,   # data frame of all photos
@@ -68,12 +66,12 @@ server <- function(input, output, session) {
 
   # --- show a given photo (thumbnail, map, table selection) -----------------
   # Does NOT touch the clipboard inputs (clip_lat, clip_lng, edit_date,
-  # edit_time) — those persist until the user changes them explicitly.
+  # edit_time) -- those persist until the user changes them explicitly.
   show_current <- function() {
     if (rv$idx < 1 || is.null(rv$meta)) return(invisible())
     row <- rv$meta[rv$idx, ]
     ext <- tolower(tools::file_ext(row$path))
-    if (ext %in% BROWSER_PHOTO_EXT) {
+    if (ext %in% .phix_env$BROWSER_PHOTO_EXT) {
       rv$thumb     <- NULL
       rv$photo_url <- paste0("originals/", basename(row$path))
     } else {
@@ -182,7 +180,7 @@ server <- function(input, output, session) {
                       { rv$date_clipboard_set <- nzchar(trimws(input$edit_time)) },
                       ignoreInit = TRUE)
 
-  # --- clear date clipboard (triggered by the × button on edit_date) -------
+  # --- clear date clipboard (triggered by the x button on edit_date) --------
   # Only clears edit_time (which cascades date_clipboard_set to FALSE via its
   # observer) and resets the flag directly.  Deliberately does NOT call
   # updateDateInput: that would trigger the edit_date observer and cause a

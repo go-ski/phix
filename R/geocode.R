@@ -6,9 +6,27 @@
 #  then expose a `geocode()` wrapper that delegates to the chosen provider.
 # ============================================================================
 
-# Geocode a place name with OpenStreetMap Nominatim. Exactly ONE request per
-# call (fires on the Search button / Enter) -- no type-ahead completion.
-# Returns list(lat, lng, name) or NULL.
+#' Geocode a place name using OpenStreetMap Nominatim
+#'
+#' Issues exactly one HTTP request to the Nominatim search API and returns the
+#' top result, or `NULL` when nothing is found or the request fails.
+#'
+#' @param q A single character string: the place name or address to search for.
+#'
+#' @return A named list with elements `lat` (numeric), `lng` (numeric), and
+#'   `name` (character), or `NULL`.
+#'
+#' @details
+#' This function makes a network request.  Ensure network access is available
+#' and respect the
+#' [Nominatim Usage Policy](https://operations.osmfoundation.org/policies/nominatim/).
+#'
+#' @examples
+#' \dontrun{
+#' geocode_osm("Knoxville, Tennessee")
+#' }
+#'
+#' @export
 geocode_osm <- function(q) {
   q <- trimws(q)
   if (!length(q) || !nzchar(q)) return(NULL)
@@ -17,7 +35,7 @@ geocode_osm <- function(q) {
       "https://nominatim.openstreetmap.org/search",
       query = list(q = q, format = "json", limit = 1),
       # Nominatim requires a descriptive User-Agent; without it requests fail.
-      httr::user_agent("photo_gps_editor R/Shiny (single-search)")
+      httr::user_agent("phix R package (single-search geocode)")
     ),
     error = function(e) NULL
   )

@@ -1,0 +1,35 @@
+Package: phix
+Type: Package
+Title: Interactive EXIF GPS and Date Editor for Scanned Photos
+Version: 0.1.0
+Authors@R: c(
+    person("George", "Ostrouchov", email = "gostrouc@utk.edu",
+           role = c("aut", "cre")))
+Description: A Shiny application for adding or correcting GPS location and
+    creation-date metadata in digitised or scanned photos (film prints,
+    slides, negatives). Provides interactive map-based location selection,
+    batch editing via clipboard, and direct EXIF writes powered by ExifTool.
+    Utility functions for reading and writing photo metadata are also exported
+    for programmatic use.
+License: MIT + file LICENSE
+SystemRequirements: ExifTool (https://exiftool.org)
+Depends: R (>= 4.1.0)
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports:
+    shiny,
+    bslib,
+    leaflet,
+    exiftoolr,
+    magick,
+    DT,
+    httr,
+    jsonlite,
+    stats,
+    tools
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+URL: https://github.com/go-ski/phix
+BugReports: https://github.com/go-ski/phix/issues

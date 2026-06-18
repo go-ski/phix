@@ -6,19 +6,53 @@
 #  write_metadata() with additional argument branches.
 # ============================================================================
 
-# Read GPS + orientation for a vector of paths in one ExifTool call.
-# Returns a data frame: path, name, lat, lng, orient, datetime.
+#' Read GPS, orientation, and datetime metadata from photos
+#'
+#' Calls ExifTool once for all `paths` and returns a data frame with one row
+#' per path.  Missing or unreadable tags are returned as `NA`.
+#'
+#' @param paths A character vector of file paths.
+#'
+#' @return A data frame with columns:
+#' \describe{
+#'   \item{path}{Full file path (character).}
+#'   \item{name}{Basename of the file (character).}
+#'   \item{lat}{GPS latitude in decimal degrees, negative for South (numeric).}
+#'   \item{lng}{GPS longitude in decimal degrees, negative for West (numeric).}
+#'   \item{orient}{EXIF orientation value 1--8, or `NA` (integer).}
+#'   \item{datetime}{`DateTimeOriginal` as UTC `POSIXct`, or `NA`.}
+#' }
+#'
+#' @examples
+#' \dontrun{
+#' meta <- read_meta(list_photos("~/Pictures/scans"))
+#' head(meta)
+#' }
+#'
+#' @export
 read_meta <- function(paths) {
+  # Zero-row skeleton returned for empty input or on early exit.
+  empty_frame <- function(n = 0L) {
+    data.frame(
+      path     = character(n),
+      name     = character(n),
+      lat      = numeric(n),
+      lng      = numeric(n),
+      orient   = integer(n),
+      datetime = as.POSIXct(character(n)),
+      stringsAsFactors = FALSE
+    )
+  }
+  if (!length(paths)) return(empty_frame())
   out <- data.frame(
     path     = paths,
     name     = basename(paths),
     lat      = NA_real_,
     lng      = NA_real_,
     orient   = NA_integer_,
-    datetime = as.POSIXct(NA),
+    datetime = as.POSIXct(NA_character_),
     stringsAsFactors = FALSE
   )
-  if (!length(paths)) return(out)
 
   d <- tryCatch(
     exiftoolr::exif_read(
@@ -30,7 +64,7 @@ read_meta <- function(paths) {
     ),
     error = function(e) NULL
   )
-  if (is.null(d) || !nrow(d)) return(out)
+  if (is.null(d) || !nrow(d)) return(out)  # ExifTool returned nothing
 
   getcol <- function(nm) if (nm %in% names(d)) d[[nm]] else rep(NA, nrow(d))
   glat <- suppressWarnings(as.numeric(getcol("GPSLatitude")))
@@ -52,7 +86,7 @@ read_meta <- function(paths) {
     as.character(as.integer(subsec[valid_ss]))
   )
 
-  # Hemisphere: magnitude * sign from N/S/E/W ref. If ref is absent, keep
+  # Hemisphere: magnitude * sign from N/S/E/W ref.  If ref is absent, keep
   # whatever sign ExifTool already returned (covers composite-style values).
   lat <- abs(glat); lng <- abs(glng)
   s <- !is.na(rlat) & toupper(substr(rlat, 1, 1)) == "S"; lat[s] <- -lat[s]
@@ -70,14 +104,32 @@ read_meta <- function(paths) {
   out
 }
 
-# Write GPS coordinates and/or a creation datetime to a photo in ONE ExifTool
-# call.  Pass `gps` as list(lat, lng) to write the location tags, and/or `dt`
-# as a POSIXct to write the three date/time tags.  DateTimeOriginal and
-# CreateDate are set to `dt`; ModifyDate is set to the current UTC time.
-# Supplying both applies all
-# tags in a single exif_call() (one process launch, one file rewrite) instead
-# of two.  Supplying neither is a no-op.  ExifTool expects a colon-separated
-# date ("YYYY:MM:DD HH:MM:SS").
+#' Write GPS coordinates and/or a creation datetime to a photo
+#'
+#' Issues a single ExifTool call so that supplying both `gps` and `dt` results
+#' in only one file rewrite.  Supplying neither is a no-op (returns `FALSE`
+#' invisibly).
+#'
+#' @param path  A single character file path.
+#' @param gps   A list with numeric elements `lat` and `lng` (decimal degrees,
+#'   negative for South/West), or `NULL` to skip GPS.
+#' @param dt    A `POSIXct` value for the original capture time (written to
+#'   `DateTimeOriginal` and `CreateDate`; `ModifyDate` is set to the current
+#'   UTC time), or `NULL` to skip datetime.
+#'
+#' @return `TRUE` invisibly when tags were written, `FALSE` invisibly when
+#'   both `gps` and `dt` are `NULL`.
+#'
+#' @examples
+#' \dontrun{
+#' write_metadata(
+#'   "scan001.jpg",
+#'   gps = list(lat = 45.123, lng = 9.456),
+#'   dt  = as.POSIXct("1975-08-14 14:30:00", tz = "UTC")
+#' )
+#' }
+#'
+#' @export
 write_metadata <- function(path, gps = NULL, dt = NULL) {
   args <- character(0)
   if (!is.null(gps)) {
@@ -112,10 +164,42 @@ write_metadata <- function(path, gps = NULL, dt = NULL) {
   invisible(TRUE)
 }
 
-# Thin wrappers preserving the original single-purpose call sites.
+#' Write GPS coordinates to a photo
+#'
+#' Thin wrapper around [write_metadata()] for GPS-only writes.
+#'
+#' @param path A single character file path.
+#' @param lat  Latitude in decimal degrees (negative for South).
+#' @param lng  Longitude in decimal degrees (negative for West).
+#'
+#' @return `TRUE` invisibly.
+#'
+#' @examples
+#' \dontrun{
+#' write_gps("scan001.jpg", lat = 45.123, lng = 9.456)
+#' }
+#'
+#' @export
 write_gps <- function(path, lat, lng) {
   write_metadata(path, gps = list(lat = lat, lng = lng))
 }
+
+#' Write a creation datetime to a photo
+#'
+#' Thin wrapper around [write_metadata()] for datetime-only writes.
+#'
+#' @param path A single character file path.
+#' @param dt   A `POSIXct` value for the original capture time.
+#'
+#' @return `TRUE` invisibly.
+#'
+#' @examples
+#' \dontrun{
+#' write_datetime("scan001.jpg",
+#'                dt = as.POSIXct("1975-08-14 14:30:00", tz = "UTC"))
+#' }
+#'
+#' @export
 write_datetime <- function(path, dt) {
   write_metadata(path, dt = dt)
 }

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Photo Viewer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box }
+body { background: #111; min-height: 100vh;
+       display: flex; align-items: center; justify-content: center;
+       overflow: auto }
+img  { max-width: 100vw; max-height: 100vh; object-fit: contain;
+       display: none }
+p    { color: #555; font: 14px/1.5 sans-serif }
+</style>
+</head>
+<body>
+<p id="hint">Waiting for photo&hellip;</p>
+<img id="photo" alt="">
+<script>
+window.addEventListener("message", function(e) {
+  if (e.data && e.data.photoUrl) {
+    var img = document.getElementById("photo");
+    img.src = e.data.photoUrl;
+    img.style.display = "block";
+    document.getElementById("hint").style.display = "none";
+    document.title = decodeURIComponent(e.data.photoUrl.split("/").pop());
+  }
+});
+// Signal the opener that this page is ready to receive a photo URL.
+if (window.opener) window.opener.postMessage({ type: "viewer_ready" }, "*");
+</script>
+</body>
+</html>

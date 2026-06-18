@@ -1,0 +1,5 @@
+^\.posit$
+^AGENTS\.md$
+^\.git$
+^\.gitignore$
+^inst/legacy$
