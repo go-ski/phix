@@ -395,7 +395,7 @@ ui <- bslib::page_sidebar(
       col_widths = c(6, 6),
       shiny::textInput("clip_lat", "Clipboard Lat", value = "",
                        placeholder = "e.g. 45.1234"),
-      shiny::textInput("clip_lng", "Clipboard Long", value = "",
+      shiny::textInput("clip_lng", "Clipboard Lon", value = "",
                        placeholder = "e.g. 9.1234")
     ),
 
@@ -417,7 +417,7 @@ ui <- bslib::page_sidebar(
 
     # Single save action: writes clipboard GPS (if changed) and/or clipboard
     # date (if changed) to the photo, then advances.
-    shiny::actionButton("save_both", "Save clipboard to photo",
+    shiny::actionButton("save_both", "Write active clipboard to photo",
                         class = "btn-outline-secondary w-100"),
 
     shiny::hr(style = "margin: 10px 0;"),

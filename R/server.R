@@ -341,12 +341,7 @@ server <- function(input, output, session) {
                    collapse = " + ")
     shiny::showNotification(sprintf("Saved %s \u2192 %s", saved, row$name),
                             type = "message")
-    if (rv$idx >= nrow(rv$meta)) {
-      shiny::showNotification("That was the last photo.", type = "message")
-      update_map()
-    } else {
-      go_to(rv$idx + 1)
-    }
+    update_map()
   })
 
   # --- drive clipboard border colors ----------------------------------------
