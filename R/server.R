@@ -341,8 +341,10 @@ server <- function(input, output, session) {
     if (is.null(rv$meta)) return(shiny::helpText("Load a directory to begin."))
     row <- rv$meta[rv$idx, ]
     shiny::tagList(
-      shiny::tags$strong(sprintf("Photo %d of %d", rv$idx, nrow(rv$meta))),
-      shiny::tags$div(row$name)
+      shiny::div(class = "sidebar-label",
+                 sprintf("Photo %d of %d", rv$idx, nrow(rv$meta))),
+      shiny::div(style = "font-size:14px; font-weight:500; color:#212529;",
+                 row$name)
     )
   })
 

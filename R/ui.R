@@ -16,7 +16,42 @@ ui <- bslib::page_sidebar(
   shiny::tags$head(
     shiny::tags$style(shiny::HTML("
     .loc-info { font-size:13px; line-height:1.6em; }
-    .current-val { font-size:12px; color:#6c757d; }
+
+    /* ---- Visual hierarchy: data is prominent, UI chrome is receded ---- */
+
+    /* Navbar title */
+    .navbar-brand {
+      font-size: 13px !important;
+      font-weight: 400 !important;
+      color: #999 !important;
+    }
+
+    /* Overline labels for Location / Date sections */
+    .sidebar-label {
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #bbb;
+      margin-top: 4px;
+      margin-bottom: 1px;
+    }
+
+    /* Input labels within the sidebar */
+    aside .form-label {
+      font-size: 11px !important;
+      color: #aaa !important;
+      margin-bottom: 2px !important;
+    }
+
+    /* HR separators: very light */
+    aside hr {
+      border-color: #eee;
+    }
+
+    /* Current GPS / date value: dark and readable */
+    .current-val { font-size:14px; color:#212529; font-weight:500; }
 
     #dir-autocomplete {
       position: absolute;
@@ -223,7 +258,7 @@ ui <- bslib::page_sidebar(
     # Directory loader
     shiny::textInput("dir", "Photo directory", value = "",
                      placeholder = "/path/to/photos"),
-    shiny::actionButton("load", "Load photos", class = "btn-primary w-100"),
+    shiny::actionButton("load", "Load photos", class = "btn-sm btn-outline-secondary w-100"),
 
     shiny::hr(style = "margin: 10px 0;"),
 
@@ -233,14 +268,14 @@ ui <- bslib::page_sidebar(
     shiny::uiOutput("status"),
     bslib::layout_columns(
       col_widths = c(6, 6),
-      shiny::actionButton("prev", "\u25C0 Prev", class = "w-100"),
-      shiny::actionButton("nxt",  "Next \u25B6", class = "w-100")
+      shiny::actionButton("prev", "\u25C0 Prev", class = "w-100 btn-sm btn-outline-secondary"),
+      shiny::actionButton("nxt",  "Next \u25B6", class = "w-100 btn-sm btn-outline-secondary")
     ),
 
     shiny::hr(style = "margin: 10px 0;"),
 
     # ---- Location section --------------------------------------------------
-    shiny::tags$strong("\U0001F4CD Location"),
+    shiny::div(class = "sidebar-label", "\U0001F4CD Location"),
     # Current: read-only from photo, with inline Copy button
     shiny::uiOutput("current_gps"),
     # Clipboard: lat/lng inputs (set by map click, Copy, or typing)
@@ -255,7 +290,7 @@ ui <- bslib::page_sidebar(
     shiny::hr(style = "margin: 10px 0;"),
 
     # ---- Date section ------------------------------------------------------
-    shiny::tags$strong("\U0001F4C5 Creation date / time (UTC)"),
+    shiny::div(class = "sidebar-label", "\U0001F4C5 Date / time (UTC)"),
     # Current: read-only from photo, with inline Copy button
     shiny::uiOutput("current_date"),
     # Clipboard: date/time inputs (set by date picker, Copy, or typing)
@@ -277,7 +312,7 @@ ui <- bslib::page_sidebar(
 
     # Photo viewer launcher
     shiny::actionButton("view_photo", "\U0001F4F7 View photo",
-                        class = "btn-outline-secondary w-100"),
+                        class = "btn-sm btn-outline-secondary w-100"),
     shiny::p(class = "text-muted mt-1", style = "font-size:12px;",
       "Opens the current photo in a separate resizable window. ",
       "The window updates automatically as you navigate.")
