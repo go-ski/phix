@@ -42,7 +42,7 @@ server <- function(input, output, session) {
       ) |>
       leaflet::setView(lng = 0, lat = 20, zoom = 2) |>
       leaflet::addControl(
-        html = "Click the map to set a clipboard location for the current photo.",
+        html = "Click the map to set a clipboard location",
         position = "topright"
       )
   })
@@ -178,8 +178,19 @@ server <- function(input, output, session) {
   # immediately light up the border before the user has entered anything.
   shiny::observeEvent(input$edit_date, { rv$date_clipboard_set <- TRUE },
                       ignoreInit = TRUE)
-  shiny::observeEvent(input$edit_time, { rv$date_clipboard_set <- TRUE },
+  shiny::observeEvent(input$edit_time,
+                      { rv$date_clipboard_set <- nzchar(trimws(input$edit_time)) },
                       ignoreInit = TRUE)
+
+  # --- clear date clipboard (triggered by the × button on edit_date) -------
+  # Only clears edit_time (which cascades date_clipboard_set to FALSE via its
+  # observer) and resets the flag directly.  Deliberately does NOT call
+  # updateDateInput: that would trigger the edit_date observer and cause a
+  # brief reactive flicker where the flag toggles TRUE then FALSE.
+  shiny::observeEvent(input$clear_date_clipboard, {
+    shiny::updateTextInput(session, "edit_time", value = "")
+    rv$date_clipboard_set <- FALSE
+  })
 
   # --- open / focus photo popup window --------------------------------------
   shiny::observeEvent(input$view_photo, {

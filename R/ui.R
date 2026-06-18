@@ -65,6 +65,30 @@ ui <- bslib::page_sidebar(
       border: 3px solid #198754 !important;
     }
 
+    /* Clear (×) button overlaid inside each clipboard input */
+    .input-clear-wrap {
+      position: relative;
+      display: block;
+      width: 100%;
+    }
+    .input-clear-btn {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: #bbb;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 0 2px;
+      z-index: 5;
+    }
+    .input-clear-btn:hover { color: #555; }
+    /* Shift left of the browser's native calendar-picker icon on date inputs */
+    .input-clear-btn-date { right: 30px; }
+
     /* Current GPS / date value: dark and readable */
     .current-val { font-size:14px; color:#212529; font-weight:500; }
 
@@ -222,6 +246,56 @@ ui <- bslib::page_sidebar(
         });
       })();
 
+      // ---- Clear (×) buttons for clipboard inputs -------------------------
+      // Text inputs (clip_lat, clip_lng, edit_time): clear the DOM value and
+      // fire jQuery input/change so Shiny's binding detects the change and all
+      // downstream reactive observers (border colours, map marker, save button)
+      // cascade automatically.
+      // Date input (edit_date): browser date pickers resist programmatic
+      // clearing; instead signal the server via clear_date_clipboard, which
+      // clears edit_time and resets date_clipboard_set.
+      (function() {
+        function addClearBtn(inp, isDate, onClear) {
+          var wrap = document.createElement('div');
+          wrap.className = 'input-clear-wrap';
+          inp.parentNode.insertBefore(wrap, inp);
+          wrap.appendChild(inp);
+          inp.style.paddingRight = isDate ? '50px' : '26px';
+          var btn = document.createElement('button');
+          btn.type    = 'button';
+          btn.className = 'input-clear-btn' + (isDate ? ' input-clear-btn-date' : '');
+          btn.setAttribute('aria-label', 'Clear');
+          btn.innerHTML = '&times;';
+          btn.addEventListener('click', onClear);
+          wrap.appendChild(btn);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+          // GPS text inputs
+          ['clip_lat', 'clip_lng'].forEach(function(id) {
+            var inp = document.getElementById(id);
+            if (!inp) return;
+            addClearBtn(inp, false, function() {
+              inp.value = '';
+              $(inp).trigger('input').trigger('change');
+            });
+          });
+
+          // Time text input
+          var timeInp = document.getElementById('edit_time');
+          if (timeInp) addClearBtn(timeInp, false, function() {
+            timeInp.value = '';
+            $(timeInp).trigger('input').trigger('change');
+          });
+
+          // Date picker — delegate reset to the server
+          var dateInp = document.querySelector('#edit_date input.form-control');
+          if (dateInp) addClearBtn(dateInp, true, function() {
+            Shiny.setInputValue('clear_date_clipboard', Date.now(), {priority: 'event'});
+          });
+        });
+      })();
+
       // ---- Photo popup window ---------------------------------------------
       // The popup always loads viewer.html — an HTML document — so the
       // browser never navigates to a raw image URL (which Safari downloads).
@@ -334,8 +408,8 @@ ui <- bslib::page_sidebar(
     # Clipboard: date/time inputs (set by date picker, Copy, or typing)
     shiny::div(class = "d-flex gap-2 align-items-end mt-1",
       shiny::div(class = "flex-grow-1",
-                 shiny::dateInput("edit_date", label = "Date", value = Sys.Date())),
-      shiny::div(shiny::textInput("edit_time", label = "Time", value = "00:00:00",
+                 shiny::dateInput("edit_date", label = "Clipboard Date", value = Sys.Date())),
+      shiny::div(shiny::textInput("edit_time", label = "Clipboard Time", value = "00:00:00",
                                   placeholder = "HH:MM:SS"))
     ),
 
