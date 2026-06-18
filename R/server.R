@@ -20,10 +20,11 @@
 server <- function(input, output, session) {
 
   rv <- shiny::reactiveValues(
-    meta      = NULL,   # data frame of all photos
-    idx       = 0,      # currently selected row (1-based)
-    thumb     = NULL,   # basename of JPEG thumbnail (RAW/TIFF fallback)
-    photo_url = NULL    # URL fed to the popup window
+    meta               = NULL,   # data frame of all photos
+    idx                = 0,      # currently selected row (1-based)
+    thumb              = NULL,   # basename of JPEG thumbnail (RAW/TIFF fallback)
+    photo_url          = NULL,   # URL fed to the popup window
+    date_clipboard_set = FALSE   # TRUE once the user explicitly sets the date clipboard
     # Clipboard GPS lives in input$clip_lat / input$clip_lng (text inputs).
     # Clipboard date lives in input$edit_date / input$edit_time (date inputs).
     # Both persist across photo navigation; Copy buttons load values into them.
@@ -172,6 +173,14 @@ server <- function(input, output, session) {
   shiny::observeEvent(input$nxt,  go_to(rv$idx + 1))
   shiny::observeEvent(input$prev, go_to(rv$idx - 1))
 
+  # --- track whether date clipboard has been explicitly set -----------------
+  # ignoreInit = TRUE so the default Sys.Date() / "00:00:00" values don't
+  # immediately light up the border before the user has entered anything.
+  shiny::observeEvent(input$edit_date, { rv$date_clipboard_set <- TRUE },
+                      ignoreInit = TRUE)
+  shiny::observeEvent(input$edit_time, { rv$date_clipboard_set <- TRUE },
+                      ignoreInit = TRUE)
+
   # --- open / focus photo popup window --------------------------------------
   shiny::observeEvent(input$view_photo, {
     if (rv$idx < 1 || is.null(rv$photo_url)) {
@@ -266,6 +275,7 @@ server <- function(input, output, session) {
                            value = as.Date(format(dt, "%Y-%m-%d", tz = "UTC")))
     shiny::updateTextInput(session, "edit_time",
                            value = format(dt, "%H:%M:%S", tz = "UTC"))
+    rv$date_clipboard_set <- TRUE
     shiny::showNotification(
       sprintf("Copied %s", format(dt, "%Y-%m-%d %H:%M:%S", tz = "UTC")),
       type = "message")
@@ -289,12 +299,17 @@ server <- function(input, output, session) {
       if (moved) gps <- list(lat = lat_in, lng = lng_in)
     }
 
-    # Date: parse clipboard date/time inputs.
-    dt_in <- parse_dt_inputs()
-    if (is.null(dt_in)) return()
+    # Date: only attempt if the date clipboard was explicitly set AND time is
+    # non-empty.  This keeps GPS saves independent of date-input validity, and
+    # prevents the default Sys.Date()/"00:00:00" values from silently
+    # overwriting a photo's date when the user only intended to save GPS.
     dt <- NULL
-    fmt <- function(x) format(x, "%Y:%m:%d %H:%M:%S", tz = "UTC")
-    if (is.na(row$datetime) || fmt(row$datetime) != fmt(dt_in)) dt <- dt_in
+    if (isTRUE(rv$date_clipboard_set) && nzchar(trimws(input$edit_time))) {
+      dt_in <- parse_dt_inputs()
+      if (is.null(dt_in)) return()   # abort on parse error (non-empty but invalid time)
+      fmt <- function(x) format(x, "%Y:%m:%d %H:%M:%S", tz = "UTC")
+      if (is.na(row$datetime) || fmt(row$datetime) != fmt(dt_in)) dt <- dt_in
+    }
 
     if (is.null(gps) && is.null(dt)) {
       shiny::showNotification("Nothing changed \u2014 nothing to save.",
@@ -321,6 +336,18 @@ server <- function(input, output, session) {
     } else {
       go_to(rv$idx + 1)
     }
+  })
+
+  # --- drive clipboard border colors ----------------------------------------
+  # Sends {gps, date} booleans to the JS handler whenever the relevant inputs
+  # change; the handler toggles .clipboard-active on each input element.
+  shiny::observe({
+    lat <- trimws(input$clip_lat)
+    lng <- trimws(input$clip_lng)
+    session$sendCustomMessage("set_clipboard_border", list(
+      gps  = nzchar(lat) && nzchar(lng),
+      date = isTRUE(rv$date_clipboard_set) && nzchar(trimws(input$edit_time))
+    ))
   })
 
   # --- compact counts row in sidebar ----------------------------------------

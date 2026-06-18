@@ -50,13 +50,19 @@ ui <- bslib::page_sidebar(
       border-color: #eee;
     }
 
-    /* Highlight the four editable input boxes with the Save-button green */
+    /* Clipboard input boxes: gray by default, green when a value has been entered */
     #clip_lat,
     #clip_lng,
     #edit_date input.form-control,
     #edit_time {
-      border: 3px solid #198754 !important;
+      border: 2px solid #ced4da !important;
       border-radius: 4px;
+    }
+    #clip_lat.clipboard-active,
+    #clip_lng.clipboard-active,
+    #edit_date input.form-control.clipboard-active,
+    #edit_time.clipboard-active {
+      border: 3px solid #198754 !important;
     }
 
     /* Current GPS / date value: dark and readable */
@@ -239,6 +245,29 @@ ui <- bslib::page_sidebar(
         }
       });
 
+      // ---- Clipboard border state -----------------------------------------
+      // Server sends {gps: bool, date: bool}; we toggle .clipboard-active on
+      // the four clipboard inputs so their border turns green only when a
+      // value has been entered.
+      Shiny.addCustomMessageHandler('set_clipboard_border', function(msg) {
+        ['clip_lat', 'clip_lng'].forEach(function(id) {
+          var el = document.getElementById(id);
+          if (el) el.classList.toggle('clipboard-active', !!msg.gps);
+        });
+        var dateEl = document.querySelector('#edit_date input.form-control');
+        if (dateEl) dateEl.classList.toggle('clipboard-active', !!msg.date);
+        var timeEl = document.getElementById('edit_time');
+        if (timeEl) timeEl.classList.toggle('clipboard-active', !!msg.date);
+
+        // Save button: green when any clipboard has data, gray otherwise.
+        var btn = document.getElementById('save_both');
+        if (btn) {
+          var hasData = !!msg.gps || !!msg.date;
+          btn.classList.toggle('btn-success',           hasData);
+          btn.classList.toggle('btn-outline-secondary', !hasData);
+        }
+      });
+
       Shiny.addCustomMessageHandler('photo_window_update', function(msg) {
         var absUrl  = appBase + msg.url;
         var already = photoWin && !photoWin.closed;
@@ -315,7 +344,7 @@ ui <- bslib::page_sidebar(
     # Single save action: writes clipboard GPS (if changed) and/or clipboard
     # date (if changed) to the photo, then advances.
     shiny::actionButton("save_both", "Save clipboard to photo",
-                        class = "btn-success w-100"),
+                        class = "btn-outline-secondary w-100"),
 
     shiny::hr(style = "margin: 10px 0;"),
 
