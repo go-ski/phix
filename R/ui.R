@@ -402,7 +402,7 @@ ui <- bslib::page_sidebar(
     shiny::hr(style = "margin: 10px 0;"),
 
     # ---- Date section ------------------------------------------------------
-    shiny::div(class = "sidebar-label", "\U0001F4C5 Date / time (UTC)"),
+    shiny::div(class = "sidebar-label", "\U0001F4C5 Date / time"),
     # Current: read-only from photo, with inline Copy button
     shiny::uiOutput("current_date"),
     # Clipboard: date/time inputs (set by date picker, Copy, or typing)
