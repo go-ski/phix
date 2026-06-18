@@ -305,8 +305,8 @@ ui <- bslib::page_sidebar(
     # Clipboard: date/time inputs (set by date picker, Copy, or typing)
     shiny::div(class = "d-flex gap-2 align-items-end mt-1",
       shiny::div(class = "flex-grow-1",
-                 shiny::dateInput("edit_date", label = NULL, value = Sys.Date())),
-      shiny::div(shiny::textInput("edit_time", label = NULL, value = "00:00:00",
+                 shiny::dateInput("edit_date", label = "Date", value = Sys.Date())),
+      shiny::div(shiny::textInput("edit_time", label = "Time", value = "00:00:00",
                                   placeholder = "HH:MM:SS"))
     ),
 
