@@ -72,7 +72,9 @@ read_meta <- function(paths) {
 
 # Write GPS coordinates and/or a creation datetime to a photo in ONE ExifTool
 # call.  Pass `gps` as list(lat, lng) to write the location tags, and/or `dt`
-# as a POSIXct to write the three date/time tags.  Supplying both applies all
+# as a POSIXct to write the three date/time tags.  DateTimeOriginal and
+# CreateDate are set to `dt`; ModifyDate is set to the current UTC time.
+# Supplying both applies all
 # tags in a single exif_call() (one process launch, one file rewrite) instead
 # of two.  Supplying neither is a no-op.  ExifTool expects a colon-separated
 # date ("YYYY:MM:DD HH:MM:SS").
@@ -91,11 +93,12 @@ write_metadata <- function(path, gps = NULL, dt = NULL) {
   }
   if (!is.null(dt)) {
     stopifnot(inherits(dt, "POSIXct"))
-    stamp <- format(dt, "%Y:%m:%d %H:%M:%S", tz = "UTC")
+    stamp     <- format(dt,         "%Y:%m:%d %H:%M:%S", tz = "UTC")
+    now_stamp <- format(Sys.time(), "%Y:%m:%d %H:%M:%S", tz = "UTC")
     args <- c(args,
       sprintf("-DateTimeOriginal=%s", stamp),
       sprintf("-CreateDate=%s",       stamp),
-      sprintf("-ModifyDate=%s",       stamp)
+      sprintf("-ModifyDate=%s",       now_stamp)
     )
   }
   if (!length(args)) return(invisible(FALSE))   # nothing to write

@@ -10,7 +10,7 @@
 # ============================================================================
 
 ui <- bslib::page_sidebar(
-  title = "Photo GPS Editor",
+  title = "Photo EXIF Location and Creation Editor",
   fillable = FALSE,
 
   shiny::tags$head(
