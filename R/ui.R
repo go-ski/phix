@@ -393,9 +393,9 @@ ui <- bslib::page_sidebar(
     # Clipboard: lat/lng inputs (set by map click, Copy, or typing)
     bslib::layout_columns(
       col_widths = c(6, 6),
-      shiny::textInput("clip_lat", "Clipboard lat", value = "",
+      shiny::textInput("clip_lat", "Clipboard Lat", value = "",
                        placeholder = "e.g. 45.1234"),
-      shiny::textInput("clip_lng", "Clipboard lng", value = "",
+      shiny::textInput("clip_lng", "Clipboard Long", value = "",
                        placeholder = "e.g. 9.1234")
     ),
 
