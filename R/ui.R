@@ -50,6 +50,15 @@ ui <- bslib::page_sidebar(
       border-color: #eee;
     }
 
+    /* Highlight the four editable input boxes with the Save-button green */
+    #clip_lat,
+    #clip_lng,
+    #edit_date input.form-control,
+    #edit_time {
+      border: 3px solid #198754 !important;
+      border-radius: 4px;
+    }
+
     /* Current GPS / date value: dark and readable */
     .current-val { font-size:14px; color:#212529; font-weight:500; }
 
@@ -305,7 +314,7 @@ ui <- bslib::page_sidebar(
 
     # Single save action: writes clipboard GPS (if changed) and/or clipboard
     # date (if changed) to the photo, then advances.
-    shiny::actionButton("save_both", "Save \u2192 photo",
+    shiny::actionButton("save_both", "Save clipboard to photo",
                         class = "btn-success w-100"),
 
     shiny::hr(style = "margin: 10px 0;"),
