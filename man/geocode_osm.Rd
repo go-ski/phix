@@ -2,7 +2,7 @@
 % Please edit documentation in R/geocode.R
 \name{geocode_osm}
 \alias{geocode_osm}
-\title{Geocode a place name using OpenStreetMap Nominatim}
+\title{Geocode a place name using \href{https://openstreetmap.org/copyright}{OpenStreetMap} Nominatim}
 \usage{
 geocode_osm(q)
 }
@@ -24,7 +24,7 @@ and respect the
 }
 \examples{
 \dontrun{
-geocode_osm("Knoxville, Tennessee")
+geocode_osm("Oak Ridge, Tennessee")
 }
 
 }
