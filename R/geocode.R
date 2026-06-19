@@ -26,7 +26,6 @@
 #' geocode_osm("Oak Ridge, Tennessee")
 #' }
 #'
-#' @export
 geocode_osm <- function(q) {
   q <- trimws(q)
   if (!length(q) || !nzchar(q)) return(NULL)

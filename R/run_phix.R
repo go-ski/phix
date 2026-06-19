@@ -28,7 +28,6 @@
 #' run_phix()
 #' }
 #'
-#' @export
 run_phix <- function(...) {
   # 1. Create and register temp directory for thumbnails + viewer HTML.
   thumb_dir <- file.path(tempdir(), "phix_thumbs")

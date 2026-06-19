@@ -20,7 +20,6 @@
 #' tmp <- tempdir()
 #' list_photos(tmp)
 #'
-#' @export
 list_photos <- function(dir) {
   if (length(dir) != 1 || is.na(dir) || !nzchar(dir) || !dir.exists(dir))
     return(character(0))
