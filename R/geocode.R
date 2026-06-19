@@ -23,7 +23,7 @@
 #'
 #' @examples
 #' \dontrun{
-#' geocode_osm("Knoxville, Tennessee")
+#' geocode_osm("Oak Ridge, Tennessee")
 #' }
 #'
 #' @export

@@ -1,15 +1,16 @@
 # phix — Photo EXIF GPS and Date Editor
 
-An R package providing a Shiny application for adding or correcting GPS
-location and creation-date metadata in digitised or scanned photos (film
+A Shiny application for adding or correcting GPS
+location and creation-date metadata in digitized or scanned photos (film
 prints, slides, negatives).
 
-Scanned images typically have no GPS coordinates and either a wrong creation
+Scanned legacy images typically have no GPS coordinates and either a wrong creation
 date (the scan date) or none at all. **phix** lets you work through a folder
-of such images and write correct EXIF metadata directly into each file using
-[ExifTool](https://exiftool.org), the de-facto standard command-line metadata
-tool, driven from R via the
-[exiftoolr](https://CRAN.R-project.org/package=exiftoolr) package.
+of such images and write correct EXIF metadata directly into each image file. Locations 
+are selected by clicking or searching a map or copied from other photos.
+
+Exchangeable Image File Format (EXIF) is a standard for storing metadata in digital image 
+files.
 
 ---
 
