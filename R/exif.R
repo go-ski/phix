@@ -29,6 +29,7 @@
 #' head(meta)
 #' }
 #'
+#' @export
 read_meta <- function(paths) {
   # Zero-row skeleton returned for empty input or on early exit.
   empty_frame <- function(n = 0L) {
