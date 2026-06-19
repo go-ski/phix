@@ -6,7 +6,7 @@
 #  then expose a `geocode()` wrapper that delegates to the chosen provider.
 # ============================================================================
 
-#' Geocode a place name using OpenStreetMap Nominatim
+#' Geocode a place name using [OpenStreetMap](openstreetmap.org/copyright) Nominatim
 #'
 #' Issues exactly one HTTP request to the Nominatim search API and returns the
 #' top result, or `NULL` when nothing is found or the request fails.
