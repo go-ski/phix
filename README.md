@@ -9,7 +9,7 @@ date (the scan date) or none at all. **phix** lets you work through a folder
 of such images and write correct EXIF metadata directly into each image file. Locations 
 are selected by clicking or searching a map or copied from other photos.
 
-(Exchangeable Image File Format)[https://en.wikipedia.org/wiki/Exif] (EXIF) is a standard for storing metadata in digital image 
+[Exchangeable Image File Format](https://en.wikipedia.org/wiki/Exif) (EXIF) is a standard for storing metadata in digital image 
 files.
 
 ---
