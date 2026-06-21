@@ -380,8 +380,7 @@ app_ui <- function() {
       shiny::actionButton("view_photo", "\U0001F4F7 View photo",
                           class = "btn-sm btn-outline-secondary w-100"),
       shiny::p(class = "text-muted mt-1", style = "font-size:12px;",
-        "Opens the current photo in a separate resizable window. ",
-        "The window updates automatically as you navigate."),
+        "Opens photo. Resizable window auto-updates with navigation."),
       bslib::layout_columns(
         col_widths = c(6, 6),
         shiny::actionButton("prev", "\u25C0 Prev", class = "w-100 btn-sm btn-outline-secondary"),
