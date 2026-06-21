@@ -77,3 +77,46 @@ test_that("datetime write without tz_offset omits capture-time offset tags", {
   expect_true("-DateTimeOriginal=1975:08:14 14:30:00" %in% captured)
   expect_false(any(grepl("^-OffsetTimeOriginal=", captured)))
 })
+
+test_that("build_metadata_args returns character(0) when nothing to write", {
+  expect_identical(build_metadata_args(), character(0))
+})
+
+test_that("build_metadata_args formats GPS tags with auto-stamps", {
+  args <- build_metadata_args(gps = list(lat = 45.5, lng = -9.25))
+  expect_true("-GPSLatitude=45.50000000" %in% args)
+  expect_true("-GPSLatitudeRef=N" %in% args)
+  expect_true("-GPSLongitude=9.25000000" %in% args)
+  expect_true("-GPSLongitudeRef=W" %in% args)
+  expect_true("-GPSMapDatum=WGS-84" %in% args)
+  # Auto-stamps always present on a non-empty write.
+  expect_true(any(grepl("^-ModifyDate=", args)))
+  expect_true("-OffsetTime=+00:00" %in% args)
+  # No date supplied => no capture-time tags.
+  expect_false(any(grepl("^-DateTimeOriginal=", args)))
+})
+
+test_that("build_metadata_args formats datetime tags with offset", {
+  args <- build_metadata_args(
+    dt = as.POSIXct("1975-08-14 12:30:00", tz = "UTC"),
+    tz_offset = 7200
+  )
+  expect_true("-DateTimeOriginal=1975:08:14 14:30:00" %in% args)
+  expect_true("-CreateDate=1975:08:14 14:30:00" %in% args)
+  expect_true("-OffsetTimeOriginal=+02:00" %in% args)
+  expect_true("-OffsetTimeDigitized=+02:00" %in% args)
+})
+
+test_that("build_metadata_args matches what write_metadata passes to ExifTool", {
+  captured <- NULL
+  testthat::local_mocked_bindings(
+    exif_call = function(args, path) { captured <<- args; invisible(TRUE) },
+    .package = "exiftoolr"
+  )
+  gps <- list(lat = 45.5, lng = -9.25)
+  # ModifyDate uses Sys.time(), so drop it before comparing.
+  drop_modify <- function(a) a[!grepl("^-ModifyDate=", a)]
+  write_metadata("dummy.jpg", gps = gps)
+  expected <- c(build_metadata_args(gps = gps), "-overwrite_original", "-P")
+  expect_identical(drop_modify(captured), drop_modify(expected))
+})

@@ -427,6 +427,8 @@ app_ui <- function() {
       # date (if changed) to the photo, then advances.
       shiny::actionButton("save_both", "Write active clipboard to photo",
                           class = "btn-outline-secondary w-100"),
+      shiny::actionButton("preview_exif", "Preview EXIF tags",
+                          class = "btn-sm btn-outline-secondary w-100 mt-2"),
 
     ),
 

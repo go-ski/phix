@@ -232,6 +232,33 @@ read_meta <- function(paths) {
 #'
 #' @export
 write_metadata <- function(path, gps = NULL, dt = NULL, tz_offset = NULL) {
+  args <- build_metadata_args(gps = gps, dt = dt, tz_offset = tz_offset)
+  if (!length(args)) return(invisible(FALSE))   # nothing to write
+
+  exiftoolr::exif_call(
+    args = c(args,
+      "-overwrite_original",   # edit in place, no _original backup file
+      "-P"                     # preserve filesystem modify time
+    ),
+    path = path
+  )
+  invisible(TRUE)
+}
+
+#' Build the ExifTool argument vector for a metadata write
+#'
+#' Returns the `-Tag=Value` strings that [write_metadata()] would pass to
+#' ExifTool (minus the `-overwrite_original` / `-P` execution flags). Shared by
+#' the writer and the EXIF-tag preview so both format tags identically.
+#'
+#' @inheritParams write_metadata
+#'
+#' @return A `character` vector of `-Tag=Value` arguments, or `character(0)`
+#'   when both `gps` and `dt` are `NULL`. When non-empty it always includes the
+#'   `ModifyDate` / `OffsetTime` bookkeeping stamps.
+#'
+#' @export
+build_metadata_args <- function(gps = NULL, dt = NULL, tz_offset = NULL) {
   # Format signed seconds as an EXIF "+HH:MM" / "-HH:MM" offset string.
   format_offset <- function(secs) {
     sign  <- if (secs < 0) "-" else "+"
@@ -269,23 +296,16 @@ write_metadata <- function(path, gps = NULL, dt = NULL, tz_offset = NULL) {
       )
     }
   }
-  if (!length(args)) return(invisible(FALSE))   # nothing to write
+  if (!length(args)) return(character(0))   # nothing to write
 
-  # Any write updates ModifyDate to the current time, unambiguously in UTC.
+  # Any write updates ModifyDate to the current time, unambiguously in UTC. In
+  # a preview this is computed a moment before the real write, so it differs
+  # from the eventually-written value by at most a few seconds.
   now_stamp <- format(Sys.time(), "%Y:%m:%d %H:%M:%S", tz = "UTC")
-  args <- c(args,
+  c(args,
     sprintf("-ModifyDate=%s", now_stamp),
     "-OffsetTime=+00:00"
   )
-
-  exiftoolr::exif_call(
-    args = c(args,
-      "-overwrite_original",   # edit in place, no _original backup file
-      "-P"                     # preserve filesystem modify time
-    ),
-    path = path
-  )
-  invisible(TRUE)
 }
 
 #' Write GPS coordinates to a photo

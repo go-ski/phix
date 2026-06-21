@@ -343,10 +343,12 @@ app_server <- function(input, output, session) {
       type = "message")
   })
 
-  # --- save clipboard GPS and/or date to photo, then advance ----------------
-  # Only writes tags that actually differ from the file's saved values.
-  shiny::observeEvent(input$save_both, {
-    if (rv$idx < 1) return()
+  # Compute the write plan for the current photo: which GPS / datetime / offset
+  # would be written given the current clipboard inputs, applying the same
+  # change-detection as the save.  Returns list(gps, dt, off) (any may be NULL),
+  # or NULL after a parse-error notification.  Shared by save and preview so
+  # both reflect identical logic.
+  compute_write_plan <- function(notify_type = "error") {
     row <- rv$meta[rv$idx, ]
 
     # GPS: parse clipboard lat/lng inputs.
@@ -369,8 +371,8 @@ app_server <- function(input, output, session) {
     dt  <- NULL
     off <- NULL
     if (isTRUE(rv$date_clipboard_set) && nzchar(trimws(input$edit_time))) {
-      parsed <- parse_dt_inputs()
-      if (is.null(parsed)) return()  # abort on parse error (non-empty but invalid time)
+      parsed <- parse_dt_inputs(notify_type = notify_type)
+      if (is.null(parsed)) return(NULL)  # abort on parse error (non-empty but invalid time)
       fmt <- function(x) format(x, "%Y:%m:%d %H:%M:%S", tz = "UTC")
       if (is.na(row$datetime) || fmt(row$datetime) != fmt(parsed$dt)) {
         dt  <- parsed$dt
@@ -393,6 +395,21 @@ app_server <- function(input, output, session) {
         off <- new_off
       }
     }
+
+    list(gps = gps, dt = dt, off = off)
+  }
+
+  # --- save clipboard GPS and/or date to photo, then advance ----------------
+  # Only writes tags that actually differ from the file's saved values.
+  shiny::observeEvent(input$save_both, {
+    if (rv$idx < 1) return()
+    row <- rv$meta[rv$idx, ]
+
+    plan <- compute_write_plan()
+    if (is.null(plan)) return()  # parse error already notified
+    gps <- plan$gps
+    dt  <- plan$dt
+    off <- plan$off
 
     if (is.null(gps) && is.null(dt)) {
       shiny::showNotification("Nothing changed \u2014 nothing to save.",
@@ -418,6 +435,59 @@ app_server <- function(input, output, session) {
     shiny::showNotification(sprintf("Saved %s \u2192 %s", saved, row$name),
                             type = "message")
     update_map()
+  })
+
+  # --- preview the EXIF tags that "Write active clipboard" would write -------
+  # Uses the same write plan and arg formatting as the save, so the modal lists
+  # exactly the tags (including ModifyDate/OffsetTime stamps) that ExifTool
+  # would receive on a subsequent save.
+  shiny::observeEvent(input$preview_exif, {
+    if (rv$idx < 1) {
+      shiny::showNotification("No photo loaded.", type = "warning")
+      return()
+    }
+    row  <- rv$meta[rv$idx, ]
+    plan <- compute_write_plan()
+    if (is.null(plan)) return()  # parse error already notified
+
+    args <- build_metadata_args(gps = plan$gps, dt = plan$dt,
+                                tz_offset = plan$off)
+    if (!length(args)) {
+      shiny::showModal(shiny::modalDialog(
+        title     = sprintf("EXIF tags \u2192 %s", row$name),
+        shiny::p("Nothing changed \u2014 no tags would be written."),
+        easyClose = TRUE,
+        footer    = shiny::modalButton("Close")
+      ))
+      return()
+    }
+
+    # Split each "-Tag=Value" arg into Tag / Value columns.
+    bare <- sub("^-", "", args)
+    tag  <- sub("=.*$", "", bare)
+    val  <- sub("^[^=]*=", "", bare)
+    rows <- Map(function(t, v) {
+      shiny::tags$tr(
+        shiny::tags$td(shiny::tags$code(t)),
+        shiny::tags$td(v)
+      )
+    }, tag, val)
+
+    shiny::showModal(shiny::modalDialog(
+      title     = sprintf("EXIF tags \u2192 %s", row$name),
+      shiny::p(class = "text-muted", style = "font-size:12px;",
+        "These are the tags that ", shiny::strong("Write active clipboard"),
+        " would write to the photo."),
+      shiny::tags$table(
+        class = "table table-sm table-striped exif-preview",
+        shiny::tags$thead(shiny::tags$tr(
+          shiny::tags$th("Tag"), shiny::tags$th("Value")
+        )),
+        shiny::tags$tbody(rows)
+      ),
+      easyClose = TRUE,
+      footer    = shiny::modalButton("Close")
+    ))
   })
 
   # --- drive clipboard border colors ----------------------------------------
