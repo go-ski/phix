@@ -17,7 +17,15 @@ A data frame with columns:
 \item{lat}{GPS latitude in decimal degrees, negative for South (numeric).}
 \item{lng}{GPS longitude in decimal degrees, negative for West (numeric).}
 \item{orient}{EXIF orientation value 1--8, or \code{NA} (integer).}
-\item{datetime}{\code{DateTimeOriginal} as UTC \code{POSIXct}, or \code{NA}.}
+\item{datetime}{\code{DateTimeOriginal} as \code{POSIXct} in UTC, or \code{NA}. The UTC
+offset is resolved from, in order: \code{OffsetTimeOriginal},
+\code{OffsetTimeDigitized}, \code{TimeZoneOffset} (integer hours), \code{GPSDateTime}
+delta (GPS time is always UTC), and GPS-coordinate timezone lookup via
+\code{lutz}. When none are available the camera's local clock time is
+returned with a UTC label.}
+\item{tz_offset}{The resolved capture-location UTC offset in signed integer
+seconds (e.g. \code{7200} for \code{+02:00}), or \code{NA} when no tier resolved an
+offset. The capture-local wall clock is \code{datetime + tz_offset}.}
 }
 }
 \description{

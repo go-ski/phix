@@ -93,9 +93,47 @@ app_server <- function(input, output, session) {
     show_current()
   }
 
-  # Parse the date/time clipboard inputs ("YYYY-MM-DD" + "HH:MM[:SS]") into a
-  # single UTC POSIXct.  Returns the POSIXct on success, or NULL after showing
-  # a notification.
+  # --- timezone helpers -----------------------------------------------------
+  # Format signed seconds as an EXIF-style "+HH:MM" / "-HH:MM" string; "" on NA.
+  fmt_offset <- function(secs) {
+    if (is.null(secs) || is.na(secs)) return("")
+    sg   <- if (secs < 0) "-" else "+"
+    secs <- abs(as.integer(round(secs)))
+    sprintf("%s%02d:%02d", sg, secs %/% 3600L, (secs %% 3600L) %/% 60L)
+  }
+
+  # Capture-local wall-clock string for a true-UTC instant + offset (seconds).
+  # The offset (or an "unknown" note) is appended when show_offset = TRUE.
+  fmt_local <- function(dt, off, fmt = "%Y-%m-%d %H:%M:%S", show_offset = TRUE) {
+    if (is.na(dt)) return("no date")
+    shifted <- if (!is.na(off)) dt + as.numeric(off) else dt
+    s <- format(shifted, fmt, tz = "UTC")
+    if (!show_offset) return(s)
+    if (!is.na(off)) paste0(s, " ", fmt_offset(off)) else paste0(s, " (offset unknown)")
+  }
+
+  # Resolve the capture-location UTC offset (signed seconds) from coordinates
+  # and a Date, via lutz.  Noon avoids DST midnight edge cases.  NA when the
+  # lookup fails or inputs are missing.
+  resolve_offset <- function(lat, lng, date) {
+    if (is.na(lat) || is.na(lng) || is.na(date)) return(NA_integer_)
+    tz_i <- tryCatch(
+      lutz::tz_lookup_coords(lat, lng, method = "fast", warn = FALSE),
+      error = function(e) NA_character_
+    )
+    if (is.na(tz_i) || !nzchar(tz_i) || !(tz_i %in% OlsonNames())) return(NA_integer_)
+    day      <- format(date, "%Y-%m-%d")
+    local_dt <- as.POSIXct(paste(day, "12:00:00"), tz = tz_i)
+    utc_dt   <- as.POSIXct(paste(day, "12:00:00"), tz = "UTC")
+    as.integer(round(as.numeric(utc_dt) - as.numeric(local_dt)))
+  }
+
+  # Parse the date/time clipboard inputs ("YYYY-MM-DD" + "HH:MM[:SS]"), which
+  # are entered in the photo's *local* timezone, into a true-UTC POSIXct plus
+  # the offset applied.  The offset is resolved from the clipboard/saved GPS
+  # (preferred) or the photo's existing tz_offset; when unknown the entered
+  # time is treated as the UTC instant directly.  Returns a list(dt, tz_offset)
+  # on success, or NULL after showing a notification.
   parse_dt_inputs <- function(notify_type = "error") {
     d <- tryCatch(as.Date(input$edit_date), error = function(e) NA)
     if (is.na(d)) {
@@ -107,15 +145,28 @@ app_server <- function(input, output, session) {
       return(NULL)
     }
     if (!grepl(":\\d{2}$", t_str)) t_str <- paste0(t_str, ":00")
-    dt <- tryCatch(
+    local <- tryCatch(
       as.POSIXct(paste(format(d, "%Y-%m-%d"), t_str), tz = "UTC"),
       error = function(e) NA
     )
-    if (is.na(dt) || !inherits(dt, "POSIXct")) {
+    if (is.na(local) || !inherits(local, "POSIXct")) {
       shiny::showNotification("Could not parse date/time.", type = notify_type)
       return(NULL)
     }
-    dt
+    off <- clipboard_offset(d)
+    dt  <- if (!is.na(off)) local - as.numeric(off) else local
+    list(dt = dt, tz_offset = off)
+  }
+
+  # Offset (signed seconds) for the current edit, resolved from the clipboard
+  # GPS first, then the saved photo's resolved tz_offset.  NA when unknown.
+  clipboard_offset <- function(date) {
+    lat <- suppressWarnings(as.numeric(trimws(input$clip_lat)))
+    lng <- suppressWarnings(as.numeric(trimws(input$clip_lng)))
+    off <- resolve_offset(lat, lng, date)
+    if (!is.na(off)) return(off)
+    if (rv$idx >= 1 && !is.null(rv$meta)) return(rv$meta$tz_offset[rv$idx])
+    NA_integer_
   }
 
   # --- directory autocompletion ---------------------------------------------
@@ -280,13 +331,15 @@ app_server <- function(input, output, session) {
       shiny::showNotification("This photo has no date to copy.", type = "warning")
       return()
     }
+    off   <- row$tz_offset
+    local <- if (!is.na(off)) dt + as.numeric(off) else dt
     shiny::updateDateInput(session, "edit_date",
-                           value = as.Date(format(dt, "%Y-%m-%d", tz = "UTC")))
+                           value = as.Date(format(local, "%Y-%m-%d", tz = "UTC")))
     shiny::updateTextInput(session, "edit_time",
-                           value = format(dt, "%H:%M:%S", tz = "UTC"))
+                           value = format(local, "%H:%M:%S", tz = "UTC"))
     rv$date_clipboard_set <- TRUE
     shiny::showNotification(
-      sprintf("Copied %s", format(dt, "%Y-%m-%d %H:%M:%S", tz = "UTC")),
+      sprintf("Copied %s", fmt_local(dt, off)),
       type = "message")
   })
 
@@ -312,12 +365,33 @@ app_server <- function(input, output, session) {
     # non-empty.  This keeps GPS saves independent of date-input validity, and
     # prevents the default Sys.Date()/"00:00:00" values from silently
     # overwriting a photo's date when the user only intended to save GPS.
-    dt <- NULL
+    # parse_dt_inputs() returns the true-UTC instant plus the offset applied.
+    dt  <- NULL
+    off <- NULL
     if (isTRUE(rv$date_clipboard_set) && nzchar(trimws(input$edit_time))) {
-      dt_in <- parse_dt_inputs()
-      if (is.null(dt_in)) return()   # abort on parse error (non-empty but invalid time)
+      parsed <- parse_dt_inputs()
+      if (is.null(parsed)) return()  # abort on parse error (non-empty but invalid time)
       fmt <- function(x) format(x, "%Y:%m:%d %H:%M:%S", tz = "UTC")
-      if (is.na(row$datetime) || fmt(row$datetime) != fmt(dt_in)) dt <- dt_in
+      if (is.na(row$datetime) || fmt(row$datetime) != fmt(parsed$dt)) {
+        dt  <- parsed$dt
+        off <- parsed$tz_offset
+      }
+    }
+
+    # Backfill offset onto an existing date when new GPS resolves a timezone
+    # but the date field itself was not changed.  The DateTimeOriginal wall
+    # clock stays fixed; only OffsetTimeOriginal/Digitized and the internal
+    # UTC instant are added.
+    if (is.null(dt) && !is.null(gps) && !is.na(row$datetime) &&
+        is.na(row$tz_offset)) {
+      new_off <- resolve_offset(gps$lat, gps$lng,
+                                as.Date(format(row$datetime, "%Y-%m-%d", tz = "UTC")))
+      if (!is.na(new_off)) {
+        # row$datetime here is the raw camera wall clock labelled UTC; the true
+        # UTC instant is that wall clock minus the offset.
+        dt  <- row$datetime - as.numeric(new_off)
+        off <- new_off
+      }
     }
 
     if (is.null(gps) && is.null(dt)) {
@@ -325,15 +399,19 @@ app_server <- function(input, output, session) {
                               type = "warning")
       return()
     }
-    ok <- tryCatch({ write_metadata(row$path, gps = gps, dt = dt); TRUE },
-                   error = function(e) {
-                     shiny::showNotification(
-                       paste("Write failed:", conditionMessage(e)), type = "error")
-                     FALSE })
+    ok <- tryCatch({
+      write_metadata(row$path, gps = gps, dt = dt, tz_offset = off); TRUE
+    }, error = function(e) {
+      shiny::showNotification(
+        paste("Write failed:", conditionMessage(e)), type = "error")
+      FALSE })
     if (!ok) return()
     meta <- rv$meta
     if (!is.null(gps)) { meta$lat[rv$idx] <- gps$lat; meta$lng[rv$idx] <- gps$lng }
-    if (!is.null(dt))  meta$datetime[rv$idx] <- dt
+    if (!is.null(dt)) {
+      meta$datetime[rv$idx]  <- dt
+      meta$tz_offset[rv$idx] <- if (is.null(off)) NA_integer_ else as.integer(off)
+    }
     rv$meta <- meta
     saved <- paste(c(if (!is.null(gps)) "GPS", if (!is.null(dt)) "date"),
                    collapse = " + ")
@@ -395,8 +473,7 @@ app_server <- function(input, output, session) {
   output$current_date <- shiny::renderUI({
     if (rv$idx < 1) return(shiny::p(class = "current-val mt-1", "\u2014"))
     row <- rv$meta[rv$idx, ]
-    txt <- if (is.na(row$datetime)) "no date"
-           else format(row$datetime, "%Y-%m-%d %H:%M:%S", tz = "UTC")
+    txt <- fmt_local(row$datetime, row$tz_offset)
     shiny::div(class = "d-flex justify-content-between align-items-center mt-1 mb-1",
       shiny::span(class = "current-val", txt),
       shiny::actionButton("copy_date", "Copy", class = "btn-sm btn-outline-secondary py-0")
@@ -411,9 +488,12 @@ app_server <- function(input, output, session) {
       Location = ifelse(is.na(rv$meta$lat) | is.na(rv$meta$lng),
                         "no-location",
                         sprintf("%.5f, %.5f", rv$meta$lat, rv$meta$lng)),
-      Date = ifelse(is.na(rv$meta$datetime),
-                    "no date",
-                    format(rv$meta$datetime, "%Y-%m-%d %H:%M", tz = "UTC")),
+      Date = vapply(
+        seq_len(nrow(rv$meta)),
+        function(i) fmt_local(rv$meta$datetime[i], rv$meta$tz_offset[i],
+                              fmt = "%Y-%m-%d %H:%M", show_offset = FALSE),
+        character(1)
+      ),
       stringsAsFactors = FALSE, check.names = FALSE
     )
   })

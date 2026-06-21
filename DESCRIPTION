@@ -26,6 +26,7 @@ Imports:
     DT,
     httr,
     jsonlite,
+    lutz,
     stats,
     tools
 Suggests:

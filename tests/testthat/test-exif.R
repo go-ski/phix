@@ -2,13 +2,15 @@ test_that("read_meta returns correct zero-row structure for empty input", {
   result <- read_meta(character(0))
   expect_s3_class(result, "data.frame")
   expect_equal(nrow(result), 0)
-  expect_named(result, c("path", "name", "lat", "lng", "orient", "datetime"))
+  expect_named(result,
+               c("path", "name", "lat", "lng", "orient", "datetime", "tz_offset"))
   expect_type(result$path,     "character")
   expect_type(result$name,     "character")
   expect_type(result$lat,      "double")
   expect_type(result$lng,      "double")
   expect_type(result$orient,   "integer")
   expect_s3_class(result$datetime, "POSIXct")
+  expect_type(result$tz_offset, "integer")
 })
 
 test_that("write_metadata with no gps and no dt returns FALSE invisibly", {
@@ -29,4 +31,49 @@ test_that("write_datetime requires POSIXct", {
     write_metadata("/tmp/dummy.jpg", dt = "2025-01-01"),
     class = "simpleError"
   )
+})
+
+test_that("any write stamps ModifyDate and OffsetTime (GPS-only included)", {
+  captured <- NULL
+  testthat::local_mocked_bindings(
+    exif_call = function(args, path) { captured <<- args; invisible(TRUE) },
+    .package = "exiftoolr"
+  )
+  write_metadata("dummy.jpg", gps = list(lat = 45, lng = 9))
+  expect_true(any(grepl("^-ModifyDate=", captured)))
+  expect_true("-OffsetTime=+00:00" %in% captured)
+  # GPS-only write must not write capture-time offset tags.
+  expect_false(any(grepl("^-OffsetTimeOriginal=", captured)))
+})
+
+test_that("datetime write applies tz_offset to wall clock and offset tags", {
+  captured <- NULL
+  testthat::local_mocked_bindings(
+    exif_call = function(args, path) { captured <<- args; invisible(TRUE) },
+    .package = "exiftoolr"
+  )
+  # 12:30 UTC at +02:00 => 14:30 local wall clock.
+  write_metadata(
+    "dummy.jpg",
+    dt = as.POSIXct("1975-08-14 12:30:00", tz = "UTC"),
+    tz_offset = 7200
+  )
+  expect_true("-DateTimeOriginal=1975:08:14 14:30:00" %in% captured)
+  expect_true("-CreateDate=1975:08:14 14:30:00" %in% captured)
+  expect_true("-OffsetTimeOriginal=+02:00" %in% captured)
+  expect_true("-OffsetTimeDigitized=+02:00" %in% captured)
+})
+
+test_that("datetime write without tz_offset omits capture-time offset tags", {
+  captured <- NULL
+  testthat::local_mocked_bindings(
+    exif_call = function(args, path) { captured <<- args; invisible(TRUE) },
+    .package = "exiftoolr"
+  )
+  write_metadata(
+    "dummy.jpg",
+    dt = as.POSIXct("1975-08-14 14:30:00", tz = "UTC")
+  )
+  expect_true("-DateTimeOriginal=1975:08:14 14:30:00" %in% captured)
+  expect_false(any(grepl("^-OffsetTimeOriginal=", captured)))
 })

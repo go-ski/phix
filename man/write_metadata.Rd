@@ -4,7 +4,7 @@
 \alias{write_metadata}
 \title{Write GPS coordinates and/or a creation datetime to a photo}
 \usage{
-write_metadata(path, gps = NULL, dt = NULL)
+write_metadata(path, gps = NULL, dt = NULL, tz_offset = NULL)
 }
 \arguments{
 \item{path}{A single character file path.}
@@ -12,9 +12,15 @@ write_metadata(path, gps = NULL, dt = NULL)
 \item{gps}{A list with numeric elements \code{lat} and \code{lng} (decimal degrees,
 negative for South/West), or \code{NULL} to skip GPS.}
 
-\item{dt}{A \code{POSIXct} value for the original capture time (written to
-\code{DateTimeOriginal} and \code{CreateDate}; \code{ModifyDate} is set to the current
-UTC time), or \code{NULL} to skip datetime.}
+\item{dt}{A \code{POSIXct} value (a true-UTC instant) for the original capture
+time, or \code{NULL} to skip datetime. When written, the capture-location wall
+clock (\code{dt + tz_offset}) is stored in \code{DateTimeOriginal} and \code{CreateDate},
+and the matching offset in \code{OffsetTimeOriginal} / \code{OffsetTimeDigitized}.}
+
+\item{tz_offset}{Signed integer seconds giving the capture-location UTC
+offset (e.g. \code{7200} for \code{+02:00}). When \code{NULL} or \code{NA}, \code{dt} is treated as
+the wall clock directly and no \code{OffsetTimeOriginal}/\code{OffsetTimeDigitized}
+tags are written (the offset stays unknown rather than being fabricated).}
 }
 \value{
 \code{TRUE} invisibly when tags were written, \code{FALSE} invisibly when
@@ -25,12 +31,18 @@ Issues a single ExifTool call so that supplying both \code{gps} and \code{dt} re
 in only one file rewrite.  Supplying neither is a no-op (returns \code{FALSE}
 invisibly).
 }
+\details{
+Any write also stamps \code{ModifyDate} with the current time in UTC and sets
+\code{OffsetTime} to \code{+00:00}, so the modification time is unambiguous. This
+happens on every write, including GPS-only writes.
+}
 \examples{
 \dontrun{
 write_metadata(
   "scan001.jpg",
   gps = list(lat = 45.123, lng = 9.456),
-  dt  = as.POSIXct("1975-08-14 14:30:00", tz = "UTC")
+  dt  = as.POSIXct("1975-08-14 14:30:00", tz = "UTC"),
+  tz_offset = 7200
 )
 }
 

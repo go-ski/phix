@@ -2,7 +2,8 @@
 % Please edit documentation in R/geocode.R
 \name{geocode_osm}
 \alias{geocode_osm}
-\title{Geocode a place name using \href{https://openstreetmap.org/copyright}{OpenStreetMap} Nominatim}
+\title{Geocode a place name using the
+\href{https://openstreetmap.org/copyright}{OpenStreetMap } Nominatim search service.}
 \usage{
 geocode_osm(q)
 }

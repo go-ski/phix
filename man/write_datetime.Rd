@@ -4,12 +4,16 @@
 \alias{write_datetime}
 \title{Write a creation datetime to a photo}
 \usage{
-write_datetime(path, dt)
+write_datetime(path, dt, tz_offset = NULL)
 }
 \arguments{
 \item{path}{A single character file path.}
 
-\item{dt}{A \code{POSIXct} value for the original capture time.}
+\item{dt}{A \code{POSIXct} value (a true-UTC instant) for the original capture
+time.}
+
+\item{tz_offset}{Signed integer seconds for the capture-location UTC offset,
+or \code{NULL}/\code{NA} to leave the offset unknown. See \code{\link[=write_metadata]{write_metadata()}}.}
 }
 \value{
 \code{TRUE} invisibly.
@@ -20,7 +24,8 @@ Thin wrapper around \code{\link[=write_metadata]{write_metadata()}} for datetime
 \examples{
 \dontrun{
 write_datetime("scan001.jpg",
-               dt = as.POSIXct("1975-08-14 14:30:00", tz = "UTC"))
+               dt = as.POSIXct("1975-08-14 14:30:00", tz = "UTC"),
+               tz_offset = 7200)
 }
 
 }

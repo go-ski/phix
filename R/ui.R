@@ -404,13 +404,18 @@ app_ui <- function() {
       shiny::div(class = "sidebar-label", "\U0001F4C5 Date / time"),
       # Current: read-only from photo, with inline Copy button
       shiny::uiOutput("current_date"),
-      # Clipboard: date/time inputs (set by date picker, Copy, or typing)
+      # Clipboard: date/time inputs (set by date picker, Copy, or typing).
+      # Entered in the photo's LOCAL timezone; the offset is inferred from the
+      # clipboard GPS (or the photo's existing offset) when written.
       shiny::div(class = "d-flex gap-2 align-items-end mt-1",
         shiny::div(class = "flex-grow-1",
                    shiny::dateInput("edit_date", label = "Clipboard Date", value = Sys.Date())),
         shiny::div(shiny::textInput("edit_time", label = "Clipboard Time", value = "00:00:00",
                                     placeholder = "HH:MM:SS"))
       ),
+      shiny::helpText(class = "mt-1 mb-0",
+                      "Date / time are in the photo's local timezone; the UTC",
+                      "offset is taken from the clipboard location."),
 
       shiny::hr(style = "margin: 10px 0;"),
 
