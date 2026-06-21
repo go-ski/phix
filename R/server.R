@@ -447,7 +447,7 @@ app_server <- function(input, output, session) {
 
   # --- photo name / index readout -------------------------------------------
   output$status <- shiny::renderUI({
-    if (is.null(rv$meta)) return(shiny::helpText("Load a directory to begin."))
+    if (is.null(rv$meta)) return(NULL)
     row <- rv$meta[rv$idx, ]
     shiny::tagList(
       shiny::div(class = "sidebar-label",

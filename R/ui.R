@@ -367,7 +367,7 @@ app_ui <- function() {
       width = 350,
 
       # Directory loader
-      shiny::textInput("dir", "Photo directory", value = "",
+      shiny::textInput("dir", "Load a directory to begin", value = "",
                        placeholder = "/path/to/photos"),
       shiny::actionButton("load", "Load photos", class = "btn-sm btn-outline-secondary w-100"),
 
